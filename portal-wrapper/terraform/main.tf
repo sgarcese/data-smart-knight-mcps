@@ -17,6 +17,10 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -53,12 +57,43 @@ locals {
   }
   custom_domain_enabled = var.use_custom_domain && var.base_domain != "" && var.route53_zone_id != ""
   portal_domain_map     = local.custom_domain_enabled ? local.portal_map : {}
+
+  opencontext_src = "${path.module}/../../opencontext"
+  package_dir     = "${path.module}/build/package"
+  lambda_zip_path = "${path.module}/build/opencontext-lambda.zip"
+
+  # Hash of the runtime source + dependency manifest + build script. Changing
+  # any of these reruns the build so the deployment package stays in sync.
+  lambda_build_hash = sha1(join("", concat(
+    [for f in sort(tolist(fileset(local.opencontext_src, "core/**"))) : filesha1("${local.opencontext_src}/${f}")],
+    [for f in sort(tolist(fileset(local.opencontext_src, "plugins/**"))) : filesha1("${local.opencontext_src}/${f}")],
+    [for f in sort(tolist(fileset(local.opencontext_src, "server/**"))) : filesha1("${local.opencontext_src}/${f}")],
+    [filesha1("${local.opencontext_src}/requirements.txt")],
+    [filesha1("${path.module}/build_lambda.sh")],
+  )))
 }
 
-resource "archive_file" "opencontext_lambda" {
+# Build the deployment package (runtime source + pip dependencies) before the
+# archive is created. Reruns whenever the source, requirements, or build script
+# change. This replaces zipping the raw source tree, which shipped no
+# dependencies and caused every cold start to fail on import.
+resource "null_resource" "build_lambda" {
+  triggers = {
+    build_hash = local.lambda_build_hash
+  }
+
+  provisioner "local-exec" {
+    command     = "${path.module}/build_lambda.sh"
+    interpreter = ["/usr/bin/env", "bash"]
+  }
+}
+
+data "archive_file" "opencontext_lambda" {
   type        = "zip"
-  source_dir  = "${path.module}/../../opencontext"
-  output_path = "${path.module}/opencontext-lambda.zip"
+  source_dir  = local.package_dir
+  output_path = local.lambda_zip_path
+
+  depends_on = [null_resource.build_lambda]
 }
 
 resource "local_file" "portal_config" {
@@ -109,11 +144,11 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 resource "aws_lambda_function" "mcp_server" {
   for_each = local.portal_map
 
-  filename         = archive_file.opencontext_lambda.output_path
+  filename         = data.archive_file.opencontext_lambda.output_path
   function_name    = local.portal_resource_name[each.key]
   role             = aws_iam_role.lambda_role[each.key].arn
   handler          = "server.adapters.aws_lambda.lambda_handler"
-  source_code_hash = filebase64sha256(archive_file.opencontext_lambda.output_path)
+  source_code_hash = data.archive_file.opencontext_lambda.output_base64sha256
   runtime          = "python3.11"
   memory_size      = var.lambda_memory
   timeout          = var.lambda_timeout
