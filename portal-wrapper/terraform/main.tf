@@ -30,6 +30,12 @@ locals {
     for portal in local.portal_definitions :
     lower(regexreplace(portal.city, "[^A-Za-z0-9]+", "-")) => portal
   }
+  portal_hostname = {
+    for key, portal in local.portal_map :
+    key => "${key}.${var.base_domain}"
+  }
+  custom_domain_enabled = var.use_custom_domain && var.base_domain != "" && var.route53_zone_id != ""
+  portal_domain_map = local.custom_domain_enabled ? local.portal_map : {}
 }
 
 resource "archive_file" "opencontext_lambda" {
@@ -118,6 +124,102 @@ resource "aws_lambda_function_url" "mcp_server_url" {
     allow_headers  = ["content-type"]
     expose_headers = ["x-request-id", "mcp-session-id"]
     max_age        = 86400
+  }
+}
+
+resource "aws_apigatewayv2_api" "mcp_server_api" {
+  for_each      = local.portal_map
+  name          = "${each.key}-${var.deployment_prefix}-api"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_integration" "lambda" {
+  for_each               = local.portal_map
+  api_id                 = aws_apigatewayv2_api.mcp_server_api[each.key].id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.mcp_server[each.key].arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "default" {
+  for_each = local.portal_map
+
+  api_id    = aws_apigatewayv2_api.mcp_server_api[each.key].id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda[each.key].id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  for_each   = local.portal_map
+  api_id     = aws_apigatewayv2_api.mcp_server_api[each.key].id
+  name       = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "allow_api_gateway" {
+  for_each = local.portal_map
+
+  statement_id  = "AllowExecutionFromAPIGateway-${each.key}"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.mcp_server[each.key].arn
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.mcp_server_api[each.key].execution_arn}/*/*"
+}
+
+resource "aws_acm_certificate" "portal_domain" {
+  for_each = local.portal_domain_map
+
+  domain_name       = local.portal_hostname[each.key]
+  validation_method = "DNS"
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = aws_acm_certificate.portal_domain
+
+  zone_id = var.route53_zone_id
+  name    = each.value.domain_validation_options[0].resource_record_name
+  type    = each.value.domain_validation_options[0].resource_record_type
+  records = [each.value.domain_validation_options[0].resource_record_value]
+  ttl     = 60
+}
+
+resource "aws_acm_certificate_validation" "portal_domain" {
+  for_each = aws_acm_certificate.portal_domain
+
+  certificate_arn         = each.value.arn
+  validation_record_fqdns = [aws_route53_record.cert_validation[each.key].fqdn]
+}
+
+resource "aws_apigatewayv2_domain_name" "portal_domain" {
+  for_each = aws_acm_certificate_validation.portal_domain
+
+  domain_name = local.portal_hostname[each.key]
+
+  domain_name_configuration {
+    endpoint_type   = "REGIONAL"
+    certificate_arn = each.value.certificate_arn
+  }
+}
+
+resource "aws_apigatewayv2_api_mapping" "portal_domain_mapping" {
+  for_each = aws_apigatewayv2_domain_name.portal_domain
+
+  api_id      = aws_apigatewayv2_api.mcp_server_api[each.key].id
+  domain_name = each.value.domain_name
+  stage       = aws_apigatewayv2_stage.default[each.key].name
+}
+
+resource "aws_route53_record" "portal_domain_alias" {
+  for_each = aws_apigatewayv2_domain_name.portal_domain
+
+  zone_id = var.route53_zone_id
+  name    = each.value.domain_name
+  type    = "A"
+
+  alias {
+    name                   = each.value.domain_name_configuration[0].host_name
+    zone_id                = each.value.domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
   }
 }
 

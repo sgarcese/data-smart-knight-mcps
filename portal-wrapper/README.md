@@ -38,16 +38,36 @@ This project includes Terraform deployment scaffolding in `portal-wrapper/terraf
 - `main.tf` packages the local `opencontext/` source tree into a Lambda deployment zip.
 - `config_template.yaml.tftpl` generates OpenContext config files for each portal definition.
 - `validate.sh` runs `terraform init`, `terraform fmt`, and `terraform validate`.
+- `variables.tf` supports environment-based deployments and optional custom domains.
 
-To validate the Terraform config:
+### Environments
+
+- `dev` / `staging`: use lambda function URLs or API Gateway endpoints without DNS assignment.
+- `prod`: enable custom domains and Route53 DNS records.
+
+### Custom domain model
+
+When `use_custom_domain` is enabled, each portal gets a unique subdomain:
+- `<portal-slug>.<base_domain>`
+
+For example:
+- `boulder.data-portals.example.com`
+- `charlotte.data-portals.example.com`
+
+### Validate and plan
 
 ```bash
 cd portal-wrapper/terraform
 ./validate.sh
+terraform plan -var='portal_definitions_file=../config/portal_definitions.yaml'
 ```
 
-To preview the deployment plan:
+To enable a production custom domain, pass values like:
 
 ```bash
-terraform plan -var='portal_definitions_file=../config/portal_definitions.yaml'
+terraform plan \
+  -var='deployment_environment=prod' \
+  -var='use_custom_domain=true' \
+  -var='base_domain=data-portals.example.com' \
+  -var='route53_zone_id=ZXXXXXXXXXXX'
 ```
