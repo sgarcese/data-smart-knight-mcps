@@ -1,0 +1,15 @@
+# Encrypted, locked remote state backend for shared/production use.
+#
+# Copy to backend.s3.hcl, fill in your values, then initialize with:
+#   terraform init -backend-config=backend.s3.hcl
+#
+# The bucket and lock table must already exist (provision them once, separately).
+# Remote state is strongly recommended because state holds portal_app_tokens
+# and the rendered config in plaintext.
+
+bucket       = "REPLACE-with-your-tfstate-bucket"
+key          = "portal-wrapper/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true
+# dynamodb_table = "terraform-locks"  # alternative locking on older setups

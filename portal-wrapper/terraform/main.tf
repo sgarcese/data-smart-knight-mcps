@@ -1,5 +1,11 @@
 terraform {
   required_version = ">= 1.0"
+
+  # Local state is the default for quick experimentation. State can contain
+  # secrets (portal_app_tokens) and the full config, so for any shared or
+  # production use switch to an encrypted, locked remote backend:
+  #   terraform init -backend-config=backend.s3.hcl
+  # See backend.s3.hcl.example. Local state files are gitignored.
   backend "local" {
     path = "terraform.tfstate"
   }
@@ -173,14 +179,17 @@ resource "aws_lambda_function" "mcp_server" {
   }
 }
 
+# Direct Lambda Function URL. Disabled by default so API Gateway is the single
+# public ingress; enable only for direct testing to avoid a second unauthenticated
+# entry point per portal.
 resource "aws_lambda_function_url" "mcp_server_url" {
-  for_each = local.portal_map
+  for_each = var.enable_function_url ? local.portal_map : {}
 
   function_name      = aws_lambda_function.mcp_server[each.key].function_name
   authorization_type = "NONE"
 
   cors {
-    allow_origins  = ["*"]
+    allow_origins  = var.cors_allow_origins
     allow_methods  = ["POST"]
     allow_headers  = ["content-type"]
     expose_headers = ["x-request-id", "mcp-session-id"]
@@ -215,6 +224,11 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.mcp_server_api[each.key].id
   name        = "$default"
   auto_deploy = true
+
+  default_route_settings {
+    throttling_burst_limit = var.api_throttling_burst_limit
+    throttling_rate_limit  = var.api_throttling_rate_limit
+  }
 }
 
 resource "aws_lambda_permission" "allow_api_gateway" {

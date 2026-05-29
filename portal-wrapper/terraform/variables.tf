@@ -27,6 +27,30 @@ variable "log_retention_days" {
   default     = 14
 }
 
+variable "enable_function_url" {
+  description = "Expose a direct Lambda Function URL in addition to API Gateway. Off by default to keep a single public ingress per portal."
+  type        = bool
+  default     = false
+}
+
+variable "cors_allow_origins" {
+  description = "Allowed CORS origins for the Lambda Function URL. Defaults to any origin for public open-data access; restrict for tighter control."
+  type        = list(string)
+  default     = ["*"]
+}
+
+variable "api_throttling_burst_limit" {
+  description = "API Gateway burst limit (concurrent requests) per portal stage."
+  type        = number
+  default     = 50
+}
+
+variable "api_throttling_rate_limit" {
+  description = "API Gateway steady-state request rate (requests/sec) per portal stage."
+  type        = number
+  default     = 25
+}
+
 variable "use_custom_domain" {
   description = "Enable custom domain provisioning."
   type        = bool

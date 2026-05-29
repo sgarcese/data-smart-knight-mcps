@@ -1,5 +1,5 @@
 output "portal_function_urls" {
-  description = "Function URLs for each deployed portal lambda."
+  description = "Direct Lambda Function URLs (only populated when enable_function_url is true)."
   value = {
     for key, resource in aws_lambda_function_url.mcp_server_url : key => resource.function_url
   }
