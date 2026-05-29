@@ -1,5 +1,11 @@
 terraform {
   required_version = ">= 1.0"
+
+  # Local state is the default for quick experimentation. State can contain
+  # secrets (portal_app_tokens) and the full config, so for any shared or
+  # production use switch to an encrypted, locked remote backend:
+  #   terraform init -backend-config=backend.s3.hcl
+  # See backend.s3.hcl.example. Local state files are gitignored.
   backend "local" {
     path = "terraform.tfstate"
   }
@@ -17,31 +23,83 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = "data-smart-connected-mcps"
+      Component   = "portal-wrapper"
+      Environment = var.deployment_environment
+      ManagedBy   = "terraform"
+    }
+  }
 }
 
 locals {
   portal_definitions = yamldecode(file(var.portal_definitions_file)).portals
   portal_map = {
     for portal in local.portal_definitions :
-    lower(regexreplace(portal.city, "[^A-Za-z0-9]+", "-")) => portal
+    trim(lower(replace(portal.city, "/[^A-Za-z0-9]+/", "-")), "-") => portal
   }
+
+  # Fully-qualified, environment-scoped name for each portal's resources so
+  # that dev/staging/prod can coexist in the same account without collisions.
+  portal_resource_name = {
+    for key, portal in local.portal_map :
+    key => "${key}-${var.deployment_prefix}-${var.deployment_environment}"
+  }
+
   portal_hostname = {
     for key, portal in local.portal_map :
     key => "${key}.${var.base_domain}"
   }
   custom_domain_enabled = var.use_custom_domain && var.base_domain != "" && var.route53_zone_id != ""
-  portal_domain_map = local.custom_domain_enabled ? local.portal_map : {}
+  portal_domain_map     = local.custom_domain_enabled ? local.portal_map : {}
+
+  opencontext_src = "${path.module}/../../opencontext"
+  package_dir     = "${path.module}/build/package"
+  lambda_zip_path = "${path.module}/build/opencontext-lambda.zip"
+
+  # Hash of the runtime source + dependency manifest + build script. Changing
+  # any of these reruns the build so the deployment package stays in sync.
+  lambda_build_hash = sha1(join("", concat(
+    [for f in sort(tolist(fileset(local.opencontext_src, "core/**"))) : filesha1("${local.opencontext_src}/${f}")],
+    [for f in sort(tolist(fileset(local.opencontext_src, "plugins/**"))) : filesha1("${local.opencontext_src}/${f}")],
+    [for f in sort(tolist(fileset(local.opencontext_src, "server/**"))) : filesha1("${local.opencontext_src}/${f}")],
+    [filesha1("${local.opencontext_src}/requirements.txt")],
+    [filesha1("${path.module}/build_lambda.sh")],
+  )))
 }
 
-resource "archive_file" "opencontext_lambda" {
+# Build the deployment package (runtime source + pip dependencies) before the
+# archive is created. Reruns whenever the source, requirements, or build script
+# change. This replaces zipping the raw source tree, which shipped no
+# dependencies and caused every cold start to fail on import.
+resource "null_resource" "build_lambda" {
+  triggers = {
+    build_hash = local.lambda_build_hash
+  }
+
+  provisioner "local-exec" {
+    command     = "${path.module}/build_lambda.sh"
+    interpreter = ["/usr/bin/env", "bash"]
+  }
+}
+
+data "archive_file" "opencontext_lambda" {
   type        = "zip"
-  source_dir  = "${path.module}/../../opencontext"
-  output_path = "${path.module}/opencontext-lambda.zip"
+  source_dir  = local.package_dir
+  output_path = local.lambda_zip_path
+
+  depends_on = [null_resource.build_lambda]
 }
 
 resource "local_file" "portal_config" {
@@ -53,10 +111,12 @@ resource "local_file" "portal_config" {
       city           = each.value.city
       url            = each.value.url
       plugin_type    = each.value.type
-      lambda_name    = "${each.key}-${var.deployment_prefix}"
+      lambda_name    = local.portal_resource_name[each.key]
       aws_region     = var.aws_region
       lambda_memory  = var.lambda_memory
       lambda_timeout = var.lambda_timeout
+      timeout        = var.plugin_timeout
+      app_token      = lookup(var.portal_app_tokens, each.key, "")
     }
   )
 
@@ -66,7 +126,7 @@ resource "local_file" "portal_config" {
 resource "aws_iam_role" "lambda_role" {
   for_each = local.portal_map
 
-  name = "${each.key}-lambda-role"
+  name = "${local.portal_resource_name[each.key]}-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -92,34 +152,44 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 resource "aws_lambda_function" "mcp_server" {
   for_each = local.portal_map
 
-  filename         = archive_file.opencontext_lambda.output_path
-  function_name    = "${each.key}-${var.deployment_prefix}"
+  filename         = data.archive_file.opencontext_lambda.output_path
+  function_name    = local.portal_resource_name[each.key]
   role             = aws_iam_role.lambda_role[each.key].arn
   handler          = "server.adapters.aws_lambda.lambda_handler"
-  source_code_hash = filebase64sha256(archive_file.opencontext_lambda.output_path)
+  source_code_hash = data.archive_file.opencontext_lambda.output_base64sha256
   runtime          = "python3.11"
   memory_size      = var.lambda_memory
   timeout          = var.lambda_timeout
 
   environment {
     variables = {
-      OPENCONTEXT_CONFIG = jsonencode(yamldecode(file(local_file.portal_config[each.key].filename)))
+      OPENCONTEXT_CONFIG = jsonencode(yamldecode(local_file.portal_config[each.key].content))
     }
   }
 
   depends_on = [
     aws_iam_role_policy_attachment.lambda_basic,
   ]
+
+  lifecycle {
+    precondition {
+      condition     = each.value.type != "socrata" || lookup(var.portal_app_tokens, each.key, "") != ""
+      error_message = "Socrata portal '${each.key}' requires an app token. Set var.portal_app_tokens[\"${each.key}\"] (register at https://dev.socrata.com/register)."
+    }
+  }
 }
 
+# Direct Lambda Function URL. Disabled by default so API Gateway is the single
+# public ingress; enable only for direct testing to avoid a second unauthenticated
+# entry point per portal.
 resource "aws_lambda_function_url" "mcp_server_url" {
-  for_each = local.portal_map
+  for_each = var.enable_function_url ? local.portal_map : {}
 
   function_name      = aws_lambda_function.mcp_server[each.key].function_name
   authorization_type = "NONE"
 
   cors {
-    allow_origins  = ["*"]
+    allow_origins  = var.cors_allow_origins
     allow_methods  = ["POST"]
     allow_headers  = ["content-type"]
     expose_headers = ["x-request-id", "mcp-session-id"]
@@ -129,7 +199,7 @@ resource "aws_lambda_function_url" "mcp_server_url" {
 
 resource "aws_apigatewayv2_api" "mcp_server_api" {
   for_each      = local.portal_map
-  name          = "${each.key}-${var.deployment_prefix}-api"
+  name          = "${local.portal_resource_name[each.key]}-api"
   protocol_type = "HTTP"
 }
 
@@ -150,10 +220,15 @@ resource "aws_apigatewayv2_route" "default" {
 }
 
 resource "aws_apigatewayv2_stage" "default" {
-  for_each   = local.portal_map
-  api_id     = aws_apigatewayv2_api.mcp_server_api[each.key].id
-  name       = "$default"
+  for_each    = local.portal_map
+  api_id      = aws_apigatewayv2_api.mcp_server_api[each.key].id
+  name        = "$default"
   auto_deploy = true
+
+  default_route_settings {
+    throttling_burst_limit = var.api_throttling_burst_limit
+    throttling_rate_limit  = var.api_throttling_rate_limit
+  }
 }
 
 resource "aws_lambda_permission" "allow_api_gateway" {
@@ -198,6 +273,7 @@ resource "aws_apigatewayv2_domain_name" "portal_domain" {
   domain_name_configuration {
     endpoint_type   = "REGIONAL"
     certificate_arn = each.value.certificate_arn
+    security_policy = "TLS_1_2"
   }
 }
 
@@ -227,5 +303,5 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
   for_each = local.portal_map
 
   name              = "/aws/lambda/${aws_lambda_function.mcp_server[each.key].function_name}"
-  retention_in_days = 14
+  retention_in_days = var.log_retention_days
 }

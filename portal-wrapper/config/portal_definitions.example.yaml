@@ -1,9 +1,13 @@
 portals:
-  - city: Boston
-    url: https://example.boston.gov/opencontext
-    type: opencontext
-    notes: "Primary Boston MCP portal"
   - city: Example City
-    url: https://example.city.gov/data
-    type: opencontext
-    notes: "Replace with actual city portal definition"
+    url: https://data.example.gov
+    type: ckan
+    notes: "Replace with a real CKAN portal definition."
+  - city: Example Hub
+    url: https://example.opendata.arcgis.com
+    type: arcgis
+    notes: "Replace with a real ArcGIS Hub portal definition."
+  - city: Example Socrata
+    url: https://data.example.gov
+    type: socrata
+    notes: "Socrata portals require an app token at deploy time."
