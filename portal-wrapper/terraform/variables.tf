@@ -62,3 +62,26 @@ variable "lambda_timeout" {
   type        = number
   default     = 120
 }
+
+variable "plugin_timeout" {
+  description = "HTTP request timeout (seconds) for the OpenContext plugin. Must be 1-300."
+  type        = number
+  default     = 120
+
+  validation {
+    condition     = var.plugin_timeout >= 1 && var.plugin_timeout <= 300
+    error_message = "plugin_timeout must be between 1 and 300 seconds."
+  }
+}
+
+variable "portal_app_tokens" {
+  description = <<-EOT
+    Per-portal secret API tokens, keyed by portal slug (e.g. "detroit-mi").
+    Socrata portals require an app token; CKAN/ArcGIS may use one for
+    authenticated access. Supply via a tfvars file or TF_VAR_portal_app_tokens
+    rather than committing it. Held in state, so use an encrypted remote backend.
+  EOT
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}

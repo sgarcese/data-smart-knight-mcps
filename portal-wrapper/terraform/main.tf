@@ -109,6 +109,8 @@ resource "local_file" "portal_config" {
       aws_region     = var.aws_region
       lambda_memory  = var.lambda_memory
       lambda_timeout = var.lambda_timeout
+      timeout        = var.plugin_timeout
+      app_token      = lookup(var.portal_app_tokens, each.key, "")
     }
   )
 
@@ -162,6 +164,13 @@ resource "aws_lambda_function" "mcp_server" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_basic,
   ]
+
+  lifecycle {
+    precondition {
+      condition     = each.value.type != "socrata" || lookup(var.portal_app_tokens, each.key, "") != ""
+      error_message = "Socrata portal '${each.key}' requires an app token. Set var.portal_app_tokens[\"${each.key}\"] (register at https://dev.socrata.com/register)."
+    }
+  }
 }
 
 resource "aws_lambda_function_url" "mcp_server_url" {

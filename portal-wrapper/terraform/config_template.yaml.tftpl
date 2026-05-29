@@ -5,8 +5,14 @@ plugins:
   ${plugin_type}:
     enabled: true
     portal_url: "${url}"
+%{ if plugin_type != "arcgis" ~}
+    base_url: "${url}"
+%{ endif ~}
     city_name: "${city}"
-    timeout: 120
+%{ if plugin_type == "socrata" ~}
+    app_token: "${app_token}"
+%{ endif ~}
+    timeout: ${timeout}
 aws:
   region: "${aws_region}"
   lambda_name: "${lambda_name}"
