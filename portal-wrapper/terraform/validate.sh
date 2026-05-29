@@ -7,10 +7,14 @@ if ! command -v terraform >/dev/null 2>&1; then
   exit 1
 fi
 
-terraform init -input=false
+# -backend=false so validation works without configuring remote state.
+terraform init -backend=false -input=false
 terraform fmt -check -recursive
 terraform validate
 
 echo "Terraform validation passed."
-echo "To preview the deployment, run:"
-echo "  terraform plan -var='portal_definitions_file=../config/portal_definitions.yaml'"
+echo "To preview a deployment (configures state + AWS provider):"
+echo "  terraform init"
+echo "  terraform plan -var='deployment_environment=dev'"
+echo "Or via the wrapper CLI:"
+echo "  python ../portal_manager.py plan --environment dev"

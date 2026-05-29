@@ -1,0 +1,51 @@
+name: portal-wrapper
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portal-wrapper/**"
+      - "opencontext/**"
+      - ".github/workflows/portal-wrapper.yml"
+  pull_request:
+    paths:
+      - "portal-wrapper/**"
+      - "opencontext/**"
+      - ".github/workflows/portal-wrapper.yml"
+
+jobs:
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal-wrapper/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.5"
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+      - name: terraform init (no backend)
+        run: terraform init -backend=false -input=false
+      - name: terraform validate
+        run: terraform validate
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal-wrapper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest tests -q
+      - name: Validate shipped portal definitions
+        run: python portal_manager.py validate
