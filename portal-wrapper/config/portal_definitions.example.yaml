@@ -1,0 +1,9 @@
+portals:
+  - city: Boston
+    url: https://example.boston.gov/opencontext
+    type: opencontext
+    notes: "Primary Boston MCP portal"
+  - city: Example City
+    url: https://example.city.gov/data
+    type: opencontext
+    notes: "Replace with actual city portal definition"
