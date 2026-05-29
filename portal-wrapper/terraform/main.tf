@@ -28,7 +28,7 @@ locals {
   portal_definitions = yamldecode(file(var.portal_definitions_file)).portals
   portal_map = {
     for portal in local.portal_definitions :
-    lower(regexreplace(portal.city, "[^A-Za-z0-9]+", "-")) => portal
+    trim(lower(replace(portal.city, "/[^A-Za-z0-9]+/", "-")), "-") => portal
   }
   portal_hostname = {
     for key, portal in local.portal_map :
@@ -103,7 +103,7 @@ resource "aws_lambda_function" "mcp_server" {
 
   environment {
     variables = {
-      OPENCONTEXT_CONFIG = jsonencode(yamldecode(file(local_file.portal_config[each.key].filename)))
+      OPENCONTEXT_CONFIG = jsonencode(yamldecode(local_file.portal_config[each.key].content))
     }
   }
 
@@ -198,6 +198,7 @@ resource "aws_apigatewayv2_domain_name" "portal_domain" {
   domain_name_configuration {
     endpoint_type   = "REGIONAL"
     certificate_arn = each.value.certificate_arn
+    security_policy = "TLS_1_2"
   }
 }
 
