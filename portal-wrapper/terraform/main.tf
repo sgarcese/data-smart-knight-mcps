@@ -22,6 +22,15 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = "data-smart-connected-mcps"
+      Component   = "portal-wrapper"
+      Environment = var.deployment_environment
+      ManagedBy   = "terraform"
+    }
+  }
 }
 
 locals {
@@ -30,12 +39,20 @@ locals {
     for portal in local.portal_definitions :
     trim(lower(replace(portal.city, "/[^A-Za-z0-9]+/", "-")), "-") => portal
   }
+
+  # Fully-qualified, environment-scoped name for each portal's resources so
+  # that dev/staging/prod can coexist in the same account without collisions.
+  portal_resource_name = {
+    for key, portal in local.portal_map :
+    key => "${key}-${var.deployment_prefix}-${var.deployment_environment}"
+  }
+
   portal_hostname = {
     for key, portal in local.portal_map :
     key => "${key}.${var.base_domain}"
   }
   custom_domain_enabled = var.use_custom_domain && var.base_domain != "" && var.route53_zone_id != ""
-  portal_domain_map = local.custom_domain_enabled ? local.portal_map : {}
+  portal_domain_map     = local.custom_domain_enabled ? local.portal_map : {}
 }
 
 resource "archive_file" "opencontext_lambda" {
@@ -53,7 +70,7 @@ resource "local_file" "portal_config" {
       city           = each.value.city
       url            = each.value.url
       plugin_type    = each.value.type
-      lambda_name    = "${each.key}-${var.deployment_prefix}"
+      lambda_name    = local.portal_resource_name[each.key]
       aws_region     = var.aws_region
       lambda_memory  = var.lambda_memory
       lambda_timeout = var.lambda_timeout
@@ -66,7 +83,7 @@ resource "local_file" "portal_config" {
 resource "aws_iam_role" "lambda_role" {
   for_each = local.portal_map
 
-  name = "${each.key}-lambda-role"
+  name = "${local.portal_resource_name[each.key]}-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -93,7 +110,7 @@ resource "aws_lambda_function" "mcp_server" {
   for_each = local.portal_map
 
   filename         = archive_file.opencontext_lambda.output_path
-  function_name    = "${each.key}-${var.deployment_prefix}"
+  function_name    = local.portal_resource_name[each.key]
   role             = aws_iam_role.lambda_role[each.key].arn
   handler          = "server.adapters.aws_lambda.lambda_handler"
   source_code_hash = filebase64sha256(archive_file.opencontext_lambda.output_path)
@@ -129,7 +146,7 @@ resource "aws_lambda_function_url" "mcp_server_url" {
 
 resource "aws_apigatewayv2_api" "mcp_server_api" {
   for_each      = local.portal_map
-  name          = "${each.key}-${var.deployment_prefix}-api"
+  name          = "${local.portal_resource_name[each.key]}-api"
   protocol_type = "HTTP"
 }
 
@@ -150,9 +167,9 @@ resource "aws_apigatewayv2_route" "default" {
 }
 
 resource "aws_apigatewayv2_stage" "default" {
-  for_each   = local.portal_map
-  api_id     = aws_apigatewayv2_api.mcp_server_api[each.key].id
-  name       = "$default"
+  for_each    = local.portal_map
+  api_id      = aws_apigatewayv2_api.mcp_server_api[each.key].id
+  name        = "$default"
   auto_deploy = true
 }
 
@@ -228,5 +245,5 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
   for_each = local.portal_map
 
   name              = "/aws/lambda/${aws_lambda_function.mcp_server[each.key].function_name}"
-  retention_in_days = 14
+  retention_in_days = var.log_retention_days
 }

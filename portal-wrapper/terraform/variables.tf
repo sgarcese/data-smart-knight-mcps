@@ -11,9 +11,20 @@ variable "aws_region" {
 }
 
 variable "deployment_environment" {
-  description = "Deployment environment: dev, staging, or prod."
+  description = "Deployment environment: dev, staging, or prod. Scopes all resource names so environments can coexist in one account."
   type        = string
   default     = "dev"
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.deployment_environment)
+    error_message = "deployment_environment must be one of: dev, staging, prod."
+  }
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch log retention in days for each portal lambda."
+  type        = number
+  default     = 14
 }
 
 variable "use_custom_domain" {
