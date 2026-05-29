@@ -30,3 +30,24 @@ Unsupported portals are intentionally skipped because OpenContext does not suppo
 2. Add or update `portal-wrapper/config/portal_definitions.yaml`.
 3. Run `python portal-wrapper/portal_manager.py` to load the portal definitions and instantiate them.
 4. Extend `portal_manager.py` with actual portal creation and AWS deployment logic.
+
+## AWS deployment scaffolding
+
+This project includes Terraform deployment scaffolding in `portal-wrapper/terraform`.
+
+- `main.tf` packages the local `opencontext/` source tree into a Lambda deployment zip.
+- `config_template.yaml.tftpl` generates OpenContext config files for each portal definition.
+- `validate.sh` runs `terraform init`, `terraform fmt`, and `terraform validate`.
+
+To validate the Terraform config:
+
+```bash
+cd portal-wrapper/terraform
+./validate.sh
+```
+
+To preview the deployment plan:
+
+```bash
+terraform plan -var='portal_definitions_file=../config/portal_definitions.yaml'
+```
