@@ -14,10 +14,36 @@
 
 ## AWS deployment approach
 
-- Prefer Infrastructure as Code with Terraform or CloudFormation.
-- Support separate environments for staging and production.
+- Prefer Infrastructure as Code with Terraform.
+- Support separate environments for dev, staging, and production.
 - Use modular AWS resources per portal, such as:
-  - ECS/Fargate or Lambda for application hosting
-  - RDS or managed database if needed
-  - API Gateway / ALB for routing
-  - S3 for static assets and backups
+  - AWS Lambda for OpenContext hosting
+  - API Gateway for request routing
+  - Route53 and ACM for production custom domains
+  - CloudWatch Logs for observability
+
+## Environment lifecycle
+
+- `dev`: provision portal resources without DNS assignment. Use Lambda URLs or API Gateway invoke URLs for testing.
+- `staging`: mirror production infrastructure in a non-production environment. Keep DNS assignment optional or skip it.
+- `prod`: create DNS and SSL resources for custom subdomains.
+
+## Production DNS strategy
+
+DNS assignment should be managed during the production deployment step only.
+The Terraform scaffold supports optional custom domain provisioning for each portal, but custom domains should typically be enabled only for the production environment.
+
+- `base_domain` defines the shared domain suffix.
+- Each portal gets a distinct subdomain derived from its city name.
+- Route53 records and ACM certificates are created only when `use_custom_domain` is enabled.
+
+## Portal wrapper deployment scaffold
+
+The wrapper includes Terraform scaffolding under `portal-wrapper/terraform`.
+It packages the local `opencontext/` source tree, generates portal-specific OpenContext config files, and deploys one AWS Lambda per supported portal.
+
+Validation steps:
+
+1. `cd portal-wrapper/terraform`
+2. `./validate.sh`
+3. `terraform plan -var='portal_definitions_file=../config/portal_definitions.yaml'`

@@ -11,11 +11,63 @@ This package wraps the `OpenContext` snapshot and provides a central entry point
 ## Contents
 
 - `portal_manager.py` — core wrapper logic.
+- `config/portal_definitions.yaml` — active portal definitions.
 - `config/portal_definitions.example.yaml` — example portal definitions.
 - `requirements.txt` — wrapper dependencies.
 
+## Supported portals
+
+Current supported portal sources:
+- ArcGIS Hub
+- Socrata
+- CKAN
+
+Unsupported portals are intentionally skipped because OpenContext does not support JKAN or OpenDataSoft.
+
 ## Getting started
 
-1. Review `docs/portals.md` and define the portal list.
-2. Copy `portal-wrapper/config/portal_definitions.example.yaml` to `portal-wrapper/config/portal_definitions.yaml`.
-3. Extend `portal_manager.py` with portal creation and deployment logic.
+1. Review `docs/portals.md` and the supported portal list.
+2. Add or update `portal-wrapper/config/portal_definitions.yaml`.
+3. Run `python portal-wrapper/portal_manager.py` to load the portal definitions and instantiate them.
+4. Extend `portal_manager.py` with actual portal creation and AWS deployment logic.
+
+## AWS deployment scaffolding
+
+This project includes Terraform deployment scaffolding in `portal-wrapper/terraform`.
+
+- `main.tf` packages the local `opencontext/` source tree into a Lambda deployment zip.
+- `config_template.yaml.tftpl` generates OpenContext config files for each portal definition.
+- `validate.sh` runs `terraform init`, `terraform fmt`, and `terraform validate`.
+- `variables.tf` supports environment-based deployments and optional custom domains.
+
+### Environments
+
+- `dev` / `staging`: use lambda function URLs or API Gateway endpoints without DNS assignment.
+- `prod`: enable custom domains and Route53 DNS records.
+
+### Custom domain model
+
+When `use_custom_domain` is enabled, each portal gets a unique subdomain:
+- `<portal-slug>.<base_domain>`
+
+For example:
+- `boulder.data-portals.example.com`
+- `charlotte.data-portals.example.com`
+
+### Validate and plan
+
+```bash
+cd portal-wrapper/terraform
+./validate.sh
+terraform plan -var='portal_definitions_file=../config/portal_definitions.yaml'
+```
+
+To enable a production custom domain, pass values like:
+
+```bash
+terraform plan \
+  -var='deployment_environment=prod' \
+  -var='use_custom_domain=true' \
+  -var='base_domain=data-portals.example.com' \
+  -var='route53_zone_id=ZXXXXXXXXXXX'
+```

@@ -1,0 +1,33 @@
+portals:
+  - city: Boulder, CO
+    url: https://open-data.bouldercolorado.gov
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Charlotte, NC
+    url: https://data.charlottenc.gov
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Columbia, SC
+    url: https://coc-colacitygis.opendata.arcgis.com
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Detroit, MI
+    url: https://data.detroitmi.gov
+    type: socrata
+    notes: "Socrata portal supported by OpenContext."
+  - city: Lexington, KY
+    url: https://data.lexingtonky.gov
+    type: ckan
+    notes: "CKAN portal supported by OpenContext."
+  - city: San Jose, CA
+    url: https://data.sanjoseca.gov
+    type: ckan
+    notes: "CKAN portal supported by OpenContext."
+  - city: St. Paul, MN
+    url: https://information.stpaul.gov
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: West Palm Beach, FL
+    url: https://gisportal-wpbgis.opendata.arcgis.com
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
