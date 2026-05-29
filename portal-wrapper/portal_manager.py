@@ -31,10 +31,16 @@ class PortalManager:
 
     def instantiate_portal(self, portal_definition: dict) -> None:
         """Instantiate or configure a portal from a single definition."""
-        # TODO: Implement the actual instantiation logic.
+        supported_types = {"arcgis", "socrata", "ckan"}
         city = portal_definition.get("city")
         url = portal_definition.get("url")
         portal_type = portal_definition.get("type")
+
+        if portal_type not in supported_types:
+            raise ValueError(
+                f"Unsupported portal type '{portal_type}' for {city}. "
+                "Supported types are: arcgis, socrata, ckan."
+            )
 
         print(f"Instantiating portal for {city}: {url} ({portal_type})")
 
