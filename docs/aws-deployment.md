@@ -192,7 +192,12 @@ state bucket. Replace `<ACCOUNT_ID>`, `<REGION>` (e.g. `us-east-1`), and
 > Bucket *creation* (§3) needs `s3:CreateBucket` etc. — do that one-time as an
 > admin. This deployer policy only needs object access to the existing bucket.
 
-### Policy document (`mcp-portal-deployer-policy.json`)
+### Policy document
+
+Save the JSON below to `portal-wrapper/iam/mcp-portal-deployer-policy.json` and
+fill in `<ACCOUNT_ID>`/`<REGION>`/`<STATE_BUCKET>`. That path is gitignored (see
+`portal-wrapper/iam/.gitignore`) so your account-specific file stays local — this
+template is the source of record.
 
 ```json
 {
@@ -295,6 +300,7 @@ simplest reproducible path is a dedicated IAM **user** for local/CI:
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+cd portal-wrapper/iam   # where mcp-portal-deployer-policy.json lives (gitignored)
 
 # 1. Create the customer-managed policy from the JSON above
 #    (fill in <ACCOUNT_ID>/<REGION>/<STATE_BUCKET> first)

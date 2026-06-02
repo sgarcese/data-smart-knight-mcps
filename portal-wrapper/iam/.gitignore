@@ -1,0 +1,4 @@
+# Local IAM policy file holding environment-specific account ID / bucket / region.
+# Populate it from the template in docs/aws-deployment.md (Appendix A); keep it
+# out of version control.
+mcp-portal-deployer-policy.json
