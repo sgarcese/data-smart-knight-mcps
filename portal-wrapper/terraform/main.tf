@@ -1,14 +1,13 @@
 terraform {
   required_version = ">= 1.0"
 
-  # Local state is the default for quick experimentation. State can contain
-  # secrets (portal_app_tokens) and the full config, so for any shared or
-  # production use switch to an encrypted, locked remote backend:
-  #   terraform init -backend-config=backend.s3.hcl
-  # See backend.s3.hcl.example. Local state files are gitignored.
-  backend "local" {
-    path = "terraform.tfstate"
-  }
+  # Remote state via S3 (partial config). Supply bucket/key/region at init:
+  #   terraform init -backend-config=backend.s3.hcl   (see backend.s3.hcl.example)
+  # State holds secrets (portal_app_tokens) and the rendered config, so the
+  # bucket must be encrypted. Validation/CI use `terraform init -backend=false`
+  # and don't need these values. For purely local experimentation, drop a
+  # backend_override.tf with `terraform { backend "local" {} }`.
+  backend "s3" {}
 
   required_providers {
     aws = {
