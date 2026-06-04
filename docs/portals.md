@@ -7,8 +7,8 @@ These portal definitions cover the supported MCP portal sources for the current 
 | Boulder, CO | https://open-data.bouldercolorado.gov | ArcGIS Hub | Supported by OpenContext.
 | Charlotte, NC | https://data.charlottenc.gov | ArcGIS Hub | Supported by OpenContext.
 | Columbia, SC | https://coc-colacitygis.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
-| Detroit, MI | https://data.detroitmi.gov | Socrata | Supported by OpenContext.
-| Lexington, KY | https://data.lexingtonky.gov | CKAN | Supported by OpenContext.
+| Detroit, MI | https://data.detroitmi.gov | ArcGIS Hub | Supported by OpenContext.
+| Lexington, KY | https://data.lexingtonky.gov | ArcGIS Hub | Supported by OpenContext.
 | San Jose, CA | https://data.sanjoseca.gov | CKAN | Supported by OpenContext.
 | St. Paul, MN | https://information.stpaul.gov | ArcGIS Hub | Supported by OpenContext.
 | West Palm Beach, FL | https://gisportal-wpbgis.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.

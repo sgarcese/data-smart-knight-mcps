@@ -13,12 +13,12 @@ portals:
     notes: "ArcGIS Hub portal supported by OpenContext."
   - city: Detroit, MI
     url: https://data.detroitmi.gov
-    type: socrata
-    notes: "Socrata portal supported by OpenContext."
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
   - city: Lexington, KY
     url: https://data.lexingtonky.gov
-    type: ckan
-    notes: "CKAN portal supported by OpenContext."
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
   - city: San Jose, CA
     url: https://data.sanjoseca.gov
     type: ckan
