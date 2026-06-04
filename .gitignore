@@ -16,6 +16,10 @@ node_modules/
 # Local environment
 .env
 
+# Deployment-specific endpoint exports (account-specific API Gateway URLs)
+staging-mcps-urls.csv
+*-mcps-urls.csv
+
 # Ignore any nested git repos if present
 **/.git
 
