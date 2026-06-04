@@ -21,3 +21,4 @@ generated-configs/
 *.zip
 
 # Keep the provider lock file committed (.terraform.lock.hcl is intentionally tracked)
+*.csv
