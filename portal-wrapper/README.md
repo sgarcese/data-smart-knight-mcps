@@ -43,11 +43,13 @@ python portal-wrapper/portal_manager.py plan -e dev          # terraform plan
 python portal-wrapper/portal_manager.py apply -e staging     # terraform apply
 ```
 
-Socrata portals require an app token (passed as an environment variable, never on argv):
+The current 8 portals are all ArcGIS Hub / CKAN and need no secrets. If you add a
+**Socrata** portal, it requires an app token (passed via the environment, never on
+argv) keyed by its slug:
 
 ```bash
 python portal-wrapper/portal_manager.py apply -e prod \
-  --app-token detroit-mi=YOUR_SOCRATA_TOKEN
+  --app-token <socrata-slug>=YOUR_SOCRATA_TOKEN
 ```
 
 ## AWS deployment scaffolding
@@ -80,10 +82,13 @@ e.g. `boulder-co.data-portals.example.com`.
 
 ```bash
 cd portal-wrapper/terraform
-./validate.sh                       # init -backend=false, fmt -check, validate
-terraform init                      # configure state + AWS provider
+./validate.sh                                      # init -backend=false, fmt -check, validate
+terraform init -backend-config=backend.s3.hcl      # configure remote state + AWS provider
 terraform plan -var='deployment_environment=dev'
 ```
+
+See [`docs/aws-deployment.md`](../docs/aws-deployment.md) for the full runbook
+(state bucket, credentials, the `/mcp` connector path, and verification).
 
 Production with a custom domain:
 
@@ -97,14 +102,18 @@ terraform plan \
 
 ### State and secrets
 
-Local state is the default for experimentation and is gitignored. State holds
-`portal_app_tokens` and the rendered config in plaintext, so for any shared or
-production use switch to the encrypted, locked S3 backend documented in
-`backend.s3.hcl.example`:
+The Terraform block declares `backend "s3" {}`, so state is remote — supply the
+bucket/key/region at init from a gitignored `backend.s3.hcl` (copy
+`backend.s3.hcl.example`):
 
 ```bash
 terraform init -backend-config=backend.s3.hcl
 ```
+
+State holds `portal_app_tokens` and the rendered config in plaintext, so the
+bucket must be encrypted. `./validate.sh` uses `terraform init -backend=false`
+and needs no backend values. For purely local experimentation, drop a
+`backend_override.tf` containing `terraform { backend "local" {} }`.
 
 ## Tests
 

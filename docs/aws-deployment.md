@@ -11,9 +11,8 @@ CloudWatch log group per portal) but **without custom DNS** — you use the API
 Gateway invoke URLs. Resources are named `<slug>-mcp-staging`, so dev/staging/prod
 can coexist in one account.
 
-One required secret: the Socrata portal (`detroit-mi`) needs a free Socrata app
-token, or `terraform plan` fails a precondition. The CKAN and ArcGIS portals need
-nothing.
+The current 8 portals are all ArcGIS Hub or CKAN, which need **no secrets**. A
+token is only required if you add a **Socrata** portal — see §4.
 
 ---
 
@@ -21,7 +20,7 @@ nothing.
 
 | Tool | Version | Why |
 |------|---------|-----|
-| Terraform | **≥ 1.11** | S3-native state locking (`use_lockfile`) in the backend example. |
+| Terraform | **≥ 1.5** | Runs the config. S3-native locking (`use_lockfile`) needs ≥ 1.11; some builds reject it (see §3). |
 | Python | **3.11+** | Runs `portal_manager.py`; build targets the py3.11 Lambda runtime. |
 | `uv` (preferred) or `pip3` | recent | `build_lambda.sh` installs deps for `x86_64-manylinux2014` / py3.11. |
 | bash | any | Runs `build_lambda.sh`. |
@@ -41,6 +40,16 @@ Configure credentials (pick one):
 The Terraform AWS provider uses the default credential chain — `AWS_PROFILE` or
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` both work. Region defaults to
 `us-east-1` (override with `-var aws_region=...`).
+
+> **Custom login tools.** If your `aws` CLI is fronted by a wrapper (e.g. a
+> `login_session`-based `aws login` flow) that the AWS SDK's default chain can't
+> read, the CLI will authenticate but Terraform will fail with *"No valid
+> credential sources found."* Export standard env-var credentials for the
+> Terraform command instead:
+> ```bash
+> eval "$(aws configure export-credentials --format env)"
+> terraform plan ...   # run in the same shell
+> ```
 
 For a first solo deploy, an admin/PowerUser identity is the fast path. For a
 dedicated least-privilege deployer, use the policy and identity in
@@ -63,26 +72,34 @@ aws s3api put-bucket-encryption --bucket YOUR-tfstate-bucket \
 (`opencontext/terraform/bootstrap/` is a Terraform alternative, but the three CLI
 calls above are simpler for one bucket.)
 
-Then create `portal-wrapper/terraform/backend.s3.hcl` from the committed
+The Terraform block already declares `backend "s3" {}`, so init only needs the
+values. Create `portal-wrapper/terraform/backend.s3.hcl` from the committed
 `backend.s3.hcl.example` (this file is gitignored):
 
 ```hcl
-bucket       = "YOUR-tfstate-bucket"
-key          = "portal-wrapper/staging.tfstate"
-region       = "us-east-1"
-encrypt      = true
-use_lockfile = true
+bucket  = "YOUR-tfstate-bucket"
+key     = "portal-wrapper/staging.tfstate"
+region  = "us-east-1"
+encrypt = true
 ```
 
-## 4. Required input: Socrata app token
+> State locking is optional and omitted above. `use_lockfile = true` enables
+> S3-native locking but requires Terraform ≥ 1.11 and is rejected by some builds;
+> a single operator can safely skip it, or use a `dynamodb_table` instead.
 
-Register a free token at <https://dev.socrata.com/register>. Supply it at deploy
-time (never commit it):
+## 4. Socrata app token (only if you add a Socrata portal)
 
-- CLI flag: `--app-token detroit-mi=YOUR_TOKEN`
-- Env var: `export TF_VAR_portal_app_tokens='{"detroit-mi":"YOUR_TOKEN"}'`
+**None of the current 8 portals are Socrata, so you can skip this section.** It
+applies only when a portal in `portal_definitions.yaml` has `type: socrata` —
+then that portal needs a free token or `terraform plan` fails a precondition
+(*"Socrata portal '<slug>' requires an app token"*).
 
-Without it, the plan stops with: *"Socrata portal 'detroit-mi' requires an app token."*
+Register at <https://dev.socrata.com/register>, then supply it at deploy time
+(keyed by the portal slug, never committed):
+
+- CLI flag: `--app-token <slug>=YOUR_TOKEN`
+- Env var: `export TF_VAR_portal_app_tokens='{"<slug>":"YOUR_TOKEN"}'`
+- Or a gitignored `secret.auto.tfvars`: `portal_app_tokens = { "<slug>" = "YOUR_TOKEN" }`
 
 ## 5. Deploy (staging)
 
@@ -94,26 +111,26 @@ python portal_manager.py validate
 
 cd terraform
 
-# b. Initialize with the encrypted S3 backend
+# b. Initialize the encrypted S3 backend
 terraform init -backend-config=backend.s3.hcl
 
-# c. Plan + apply staging (token required for Detroit/socrata)
-terraform plan \
-  -var=deployment_environment=staging \
-  -var='portal_app_tokens={"detroit-mi":"YOUR_TOKEN"}'
+# c. If your CLI uses a custom login (see §2), export creds for Terraform:
+eval "$(aws configure export-credentials --format env)"
 
-terraform apply \
-  -var=deployment_environment=staging \
-  -var='portal_app_tokens={"detroit-mi":"YOUR_TOKEN"}'
+# d. Plan + apply staging (no -var needed; all 8 portals are token-free)
+terraform plan  -var=deployment_environment=staging -out=staging.tfplan
+terraform apply staging.tfplan
 ```
 
-Or drive it through the wrapper CLI (passes the token via the environment, not
-argv):
+Or drive it through the wrapper CLI:
 
 ```bash
 # run `terraform init -backend-config=backend.s3.hcl` once first
-python portal_manager.py apply -e staging --app-token detroit-mi=YOUR_TOKEN
+python portal_manager.py apply -e staging
 ```
+
+(If a Socrata portal is present, add `-var='portal_app_tokens={"<slug>":"…"}'` to
+plan/apply, or `--app-token <slug>=…` to the CLI — see §4.)
 
 `terraform apply` runs `build_lambda.sh` automatically (builds the ~22 MB package
 with dependencies), then creates per portal: an IAM role, a Lambda, an HTTP API
@@ -125,28 +142,32 @@ Gateway, and a CloudWatch log group.
 terraform output portal_api_endpoints
 ```
 
-Returns `<slug> => https://<api-id>.execute-api.us-east-1.amazonaws.com`. These are
-the MCP server URLs to register as Claude custom connectors.
+Returns `<slug> => https://<api-id>.execute-api.us-east-1.amazonaws.com/`. The MCP
+server is served at the **`/mcp`** path, so the connector URL to register in
+Claude is `<endpoint>mcp` (e.g. `https://abc123.execute-api.us-east-1.amazonaws.com/mcp`).
+A `POST /` returns a 404 ("Expected '/mcp'").
 
 ## 7. Verify end-to-end
 
-1. **Live smoke test** — MCP `initialize` handshake against one endpoint:
+1. **Live smoke test** — MCP `initialize` handshake against one endpoint (note the
+   `/mcp` path):
    ```bash
-   curl -sS -X POST "$(terraform output -raw portal_api_endpoints | python3 -c 'import sys,json;print(json.load(sys.stdin)["lexington-ky"])')" \
-     -H 'content-type: application/json' \
+   base=$(terraform output -json portal_api_endpoints | python3 -c 'import sys,json;print(json.load(sys.stdin)["lexington-ky"].rstrip("/"))')
+   curl -sS -X POST "$base/mcp" \
+     -H 'content-type: application/json' -H 'accept: application/json' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
    ```
-   Expect a JSON-RPC result, not a 500. A 500 with an import error means the build
-   step didn't run — re-run `terraform apply`.
+   Expect HTTP 200 with a JSON-RPC `result`. Common failures:
+   - **500 import error** → the build step didn't run; re-run `terraform apply`.
+   - **500 "plugin … initialization returned False"** → the portal `type`/`url` in
+     `portal_definitions.yaml` is wrong for that portal (e.g. a portal labeled
+     `ckan`/`socrata` that is actually ArcGIS Hub). Fix the definition and re-apply.
 2. **Logs**: `aws logs tail /aws/lambda/lexington-ky-mcp-staging --since 5m`.
-3. **Socrata check**: confirm `detroit-mi-mcp-staging` returns tool results, which
-   exercises the app token.
 
 ## 8. Teardown
 
 ```bash
-terraform destroy -var=deployment_environment=staging \
-  -var='portal_app_tokens={"detroit-mi":"YOUR_TOKEN"}'
+terraform destroy -var=deployment_environment=staging
 ```
 
 ## 9. Prod with custom domains
@@ -159,8 +180,7 @@ terraform apply \
   -var=deployment_environment=prod \
   -var=use_custom_domain=true \
   -var=base_domain=data-portals.example.com \
-  -var=route53_zone_id=ZXXXXXXXXXXX \
-  -var='portal_app_tokens={"detroit-mi":"YOUR_TOKEN"}'
+  -var=route53_zone_id=ZXXXXXXXXXXX
 ```
 
 Requires a registered domain with a Route53 hosted zone, and the deployer identity
@@ -174,9 +194,11 @@ needs the extra ACM/Route53 permissions noted in Appendix A.
 - **AWS**: an account + configured credentials — admin for a first deploy, or the
   least-privilege `mcp-portal-deployer` identity in Appendix A.
 - **Provision once**: an encrypted, versioned S3 state bucket (§3) + `backend.s3.hcl`.
-- **One secret**: a free Socrata app token for the Detroit portal (§4).
-- **Run**: validate → `init -backend-config` → `plan`/`apply` with
-  `deployment_environment=staging` (§5), then read `portal_api_endpoints` (§6).
+- **Secrets**: none for the current 8 portals (all ArcGIS Hub / CKAN); a Socrata
+  portal would need a token (§4).
+- **Run**: validate → `init -backend-config` → (export creds if needed) →
+  `plan`/`apply` with `deployment_environment=staging` (§5), then read
+  `portal_api_endpoints` and append `/mcp` (§6).
 
 No custom domain, Route53, or ACM is needed for staging.
 

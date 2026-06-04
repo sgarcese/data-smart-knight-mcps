@@ -50,14 +50,14 @@ Resource names are environment-scoped (`<slug>-<prefix>-<env>`) so multiple
 environments can coexist in one account.
 
 For an end-to-end AWS deployment runbook — prerequisites, encrypted S3 state, the
-required Socrata token, and a least-privilege deployer IAM policy — see
+`/mcp` connector path, and a least-privilege deployer IAM policy — see
 [aws-deployment.md](aws-deployment.md).
 
 Validation steps:
 
 1. `cd portal-wrapper/terraform`
 2. `./validate.sh`
-3. `terraform init && terraform plan -var='deployment_environment=dev'`
+3. `terraform init -backend-config=backend.s3.hcl && terraform plan -var='deployment_environment=dev'`
    (or `python ../portal_manager.py plan -e dev`)
 
 ## Security and operations posture
@@ -66,8 +66,9 @@ Validation steps:
   opt-in (`enable_function_url`). API Gateway throttling is enabled by default.
 - Secrets (Socrata `app_token`, optional CKAN `api_key`) are supplied via the
   sensitive `portal_app_tokens` variable / `TF_VAR_portal_app_tokens`, never
-  committed. They are held in Terraform state, so use the encrypted, locked S3
-  backend (`backend.s3.hcl.example`) for shared/production deployments.
+  committed. They are held in Terraform state, so use the encrypted remote S3
+  backend (`backend.s3.hcl.example`; state locking optional) for shared/production
+  deployments.
 - All resources are tagged via provider `default_tags`
   (Project/Component/Environment/ManagedBy).
 
