@@ -7,8 +7,10 @@ crash.*.log
 terraform.tfplan
 *.tfplan
 
-# Local backend config and variable files holding secrets
-backend.s3.hcl
+# Local backend config (holds the real bucket name) and secret var files.
+# Match any *.s3.hcl (incl. typos like backens.s3.hcl) but keep the template.
+*.s3.hcl
+!*.s3.hcl.example
 *.tfvars
 *.tfvars.json
 !*.tfvars.example

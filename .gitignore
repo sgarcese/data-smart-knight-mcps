@@ -18,3 +18,8 @@ node_modules/
 
 # Ignore any nested git repos if present
 **/.git
+
+# Local AI-agent / editor config (not for public repo)
+.agent.md
+.instructions.md
+.claude/

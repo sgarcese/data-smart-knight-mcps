@@ -52,6 +52,9 @@ python portal-wrapper/portal_manager.py apply -e prod \
 
 ## AWS deployment scaffolding
 
+> Full step-by-step AWS runbook (prerequisites, encrypted S3 state, Socrata token,
+> and a least-privilege deployer IAM policy): [`docs/aws-deployment.md`](../docs/aws-deployment.md).
+
 Terraform lives in `portal-wrapper/terraform`. For each portal definition it:
 
 - builds a Lambda deployment package via `build_lambda.sh` (runtime source +

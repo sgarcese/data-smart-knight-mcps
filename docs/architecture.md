@@ -49,6 +49,10 @@ definitions and drives Terraform with the same slug algorithm.
 Resource names are environment-scoped (`<slug>-<prefix>-<env>`) so multiple
 environments can coexist in one account.
 
+For an end-to-end AWS deployment runbook — prerequisites, encrypted S3 state, the
+required Socrata token, and a least-privilege deployer IAM policy — see
+[aws-deployment.md](aws-deployment.md).
+
 Validation steps:
 
 1. `cd portal-wrapper/terraform`
