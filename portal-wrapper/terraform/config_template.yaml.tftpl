@@ -1,5 +1,5 @@
 server_name: "${city} OpenData MCP"
-description: "OpenData MCP for ${city}"
+description: "OpenData MCP for ${city}%{ if warning != "" } — WARNING: ${warning}%{ endif }"
 organization: "${city}"
 plugins:
   ${plugin_type}:

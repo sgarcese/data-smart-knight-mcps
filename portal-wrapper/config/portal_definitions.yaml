@@ -15,10 +15,23 @@ portals:
     url: https://data.detroitmi.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Hawaii
+    url: https://opendata.hawaii.gov
+    type: ckan
+    notes: "State of Hawaii open data CKAN portal supported by OpenContext."
+  - city: Indiana
+    url: https://hub.mph.in.gov
+    type: ckan
+    notes: "Indiana Management Performance Hub (statewide) CKAN portal supported by OpenContext."
   - city: Lexington, KY
     url: https://data.lexingtonky.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Philadelphia, PA
+    url: https://data-phl.opendata.arcgis.com
+    type: arcgis
+    warning: "This portal is incomplete — dataset coverage is partial and results may be missing or limited."
+    notes: "Philadelphia geospatial open data ArcGIS Hub portal supported by OpenContext. Incomplete coverage."
   - city: San Jose, CA
     url: https://data.sanjoseca.gov
     type: ckan

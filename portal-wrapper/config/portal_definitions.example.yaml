@@ -6,6 +6,9 @@ portals:
   - city: Example Hub
     url: https://example.opendata.arcgis.com
     type: arcgis
+    # Optional. `notes` is internal-only. `warning` is appended to the MCP
+    # server description shown to users (e.g. flag incomplete coverage).
+    warning: "This portal is incomplete — dataset coverage is partial."
     notes: "Replace with a real ArcGIS Hub portal definition."
   - city: Example Socrata
     url: https://data.example.gov

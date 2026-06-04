@@ -110,6 +110,7 @@ resource "local_file" "portal_config" {
       city           = each.value.city
       url            = each.value.url
       plugin_type    = each.value.type
+      warning        = lookup(each.value, "warning", "")
       lambda_name    = local.portal_resource_name[each.key]
       aws_region     = var.aws_region
       lambda_memory  = var.lambda_memory
