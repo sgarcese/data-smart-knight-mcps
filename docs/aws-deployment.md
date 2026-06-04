@@ -1,6 +1,6 @@
 # Deploying the MCP Portals to AWS
 
-This runbook deploys the 8 portal Lambdas in `portal-wrapper/` to AWS. It is
+This runbook deploys the portal Lambdas in `portal-wrapper/` to AWS. It is
 written for a **staging** environment with **encrypted remote S3 state**, starting
 from a machine where **AWS credentials are not yet configured**. The same steps
 apply to `dev`/`prod` by changing `deployment_environment` (prod additionally
@@ -11,7 +11,7 @@ CloudWatch log group per portal) but **without custom DNS** — you use the API
 Gateway invoke URLs. Resources are named `<slug>-mcp-staging`, so dev/staging/prod
 can coexist in one account.
 
-The current 8 portals are all ArcGIS Hub or CKAN, which need **no secrets**. A
+The current portals are all ArcGIS Hub or CKAN, which need **no secrets**. A
 token is only required if you add a **Socrata** portal — see §4.
 
 ---
@@ -89,7 +89,7 @@ encrypt = true
 
 ## 4. Socrata app token (only if you add a Socrata portal)
 
-**None of the current 8 portals are Socrata, so you can skip this section.** It
+**None of the current portals are Socrata, so you can skip this section.** It
 applies only when a portal in `portal_definitions.yaml` has `type: socrata` —
 then that portal needs a free token or `terraform plan` fails a precondition
 (*"Socrata portal '<slug>' requires an app token"*).
@@ -106,7 +106,7 @@ Register at <https://dev.socrata.com/register>, then supply it at deploy time
 ```bash
 cd portal-wrapper
 
-# a. Validate the 8 definitions (types, required fields, unique slugs)
+# a. Validate the definitions (types, required fields, unique slugs)
 python portal_manager.py validate
 
 cd terraform
@@ -117,7 +117,7 @@ terraform init -backend-config=backend.s3.hcl
 # c. If your CLI uses a custom login (see §2), export creds for Terraform:
 eval "$(aws configure export-credentials --format env)"
 
-# d. Plan + apply staging (no -var needed; all 8 portals are token-free)
+# d. Plan + apply staging (no -var needed; all current portals are token-free)
 terraform plan  -var=deployment_environment=staging -out=staging.tfplan
 terraform apply staging.tfplan
 ```
@@ -194,7 +194,7 @@ needs the extra ACM/Route53 permissions noted in Appendix A.
 - **AWS**: an account + configured credentials — admin for a first deploy, or the
   least-privilege `mcp-portal-deployer` identity in Appendix A.
 - **Provision once**: an encrypted, versioned S3 state bucket (§3) + `backend.s3.hcl`.
-- **Secrets**: none for the current 8 portals (all ArcGIS Hub / CKAN); a Socrata
+- **Secrets**: none for the current portals (all ArcGIS Hub / CKAN); a Socrata
   portal would need a token (§4).
 - **Run**: validate → `init -backend-config` → (export creds if needed) →
   `plan`/`apply` with `deployment_environment=staging` (§5), then read

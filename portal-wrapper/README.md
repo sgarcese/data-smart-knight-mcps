@@ -24,6 +24,18 @@ Current supported portal sources:
 
 Unsupported portals are intentionally skipped because OpenContext does not support JKAN or OpenDataSoft.
 
+## Definition fields
+
+Each entry in `config/portal_definitions.yaml` supports:
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `city` | yes | Display name and source of the derived slug. |
+| `url` | yes | Portal base URL. |
+| `type` | yes | One of `arcgis`, `socrata`, `ckan`. |
+| `warning` | no | Appended to the user-facing MCP server description (e.g. flag incomplete coverage). Surfaces in Claude's connector list and to the model. |
+| `notes` | no | Internal documentation only; never reaches users. |
+
 ## Getting started
 
 1. Review `docs/portals.md` and the supported portal list.
@@ -43,7 +55,7 @@ python portal-wrapper/portal_manager.py plan -e dev          # terraform plan
 python portal-wrapper/portal_manager.py apply -e staging     # terraform apply
 ```
 
-The current 8 portals are all ArcGIS Hub / CKAN and need no secrets. If you add a
+The current portals are all ArcGIS Hub / CKAN and need no secrets. If you add a
 **Socrata** portal, it requires an app token (passed via the environment, never on
 argv) keyed by its slug:
 
