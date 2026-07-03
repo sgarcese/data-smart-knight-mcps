@@ -188,6 +188,42 @@ needs the extra ACM/Route53 permissions noted in Appendix A.
 
 ---
 
+## 10. Responsive Cities deployment (rc-deploy role, `<slug>.responsive.city`)
+
+The canonical deployment of this project runs in the Responsive Cities AWS
+account (`564762345093`) and follows its `rc-*` conventions. Everything is
+captured in the checked-in `rc-prod.tfvars` / `rc-staging.tfvars`:
+
+- **Resource naming**: `resource_name_prefix = "rc-"` → Lambdas
+  `rc-<slug>-mcp-<env>`, roles `rc-<slug>-mcp-<env>-role`, etc. This matters
+  because the deployment role is scoped to `rc-*` resources.
+- **Deployment identity**: the `rc-deploy` IAM role (defined in the
+  `phila-mcp` repo's `terraform/bootstrap/`, applied with admin credentials).
+  It has enumerated, `rc-*`-scoped permissions, may only create IAM roles
+  carrying the `rc-permissions-boundary`, and is explicitly denied from
+  modifying itself. Locally it is used via the `rc-deploy` CLI profile
+  (`role_arn`/`source_profile` chaining through the `rc-deployer` IAM user,
+  because the account root user cannot assume roles). This replaces the
+  Appendix A identity for this environment.
+- **Boundary**: `permissions_boundary_arn` must be set (rc-prod/rc-staging
+  tfvars do this) or `rc-deploy` will get AccessDenied on `iam:CreateRole`.
+- **State**: `s3://rc-tfstate-564762345093`, key
+  `rc/data-smart/portal-wrapper/terraform.tfstate` (see
+  `backend.s3.hcl.example`).
+- **DNS**: `base_domain = responsive.city` (hosted zone
+  `Z02890412WHZ405FIOT0Y`, same account) → MCP endpoints at
+  `https://<slug>.responsive.city/mcp` (e.g.
+  `https://boulder-co.responsive.city/mcp`).
+
+```bash
+cd portal-wrapper/terraform
+AWS_PROFILE=rc-deploy terraform init -backend-config=backend.s3.hcl
+AWS_PROFILE=rc-deploy terraform plan  -var-file=rc-prod.tfvars
+AWS_PROFILE=rc-deploy terraform apply -var-file=rc-prod.tfvars
+```
+
+---
+
 ## Summary
 
 - **Install**: AWS CLI (Terraform/Python/uv assumed present).

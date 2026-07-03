@@ -7,8 +7,8 @@
 # strongly recommended because state holds portal_app_tokens and the rendered
 # config in plaintext, so the bucket must be encrypted.
 
-bucket  = "REPLACE-with-your-tfstate-bucket"
-key     = "portal-wrapper/terraform.tfstate"
+bucket  = "rc-tfstate-564762345093"  # Responsive Cities state bucket (see phila-mcp/terraform/bootstrap)
+key     = "rc/data-smart/portal-wrapper/terraform.tfstate"
 region  = "us-east-1"
 encrypt = true
 

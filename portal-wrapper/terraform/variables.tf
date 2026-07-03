@@ -109,3 +109,15 @@ variable "portal_app_tokens" {
   default     = {}
   sensitive   = true
 }
+
+variable "resource_name_prefix" {
+  description = "Prefix prepended to every portal resource name (Lambda, IAM role, API, log group). The Responsive Cities deployment uses \"rc-\" so resources match the rc-deploy role's rc-* scoping."
+  type        = string
+  default     = ""
+}
+
+variable "permissions_boundary_arn" {
+  description = "Permissions boundary ARN attached to the per-portal Lambda execution roles. Required when deploying via the rc-deploy role, which may only create roles carrying the rc-permissions-boundary."
+  type        = string
+  default     = ""
+}

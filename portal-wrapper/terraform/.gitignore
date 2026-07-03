@@ -14,6 +14,8 @@ terraform.tfplan
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+# rc-*.tfvars hold no secrets (naming/domain config only) — keep them tracked
+!rc-*.tfvars
 
 # Build and generated artifacts
 build/

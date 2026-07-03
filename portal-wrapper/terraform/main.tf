@@ -53,7 +53,7 @@ locals {
   # that dev/staging/prod can coexist in the same account without collisions.
   portal_resource_name = {
     for key, portal in local.portal_map :
-    key => "${key}-${var.deployment_prefix}-${var.deployment_environment}"
+    key => "${var.resource_name_prefix}${key}-${var.deployment_prefix}-${var.deployment_environment}"
   }
 
   portal_hostname = {
@@ -127,6 +127,10 @@ resource "aws_iam_role" "lambda_role" {
   for_each = local.portal_map
 
   name = "${local.portal_resource_name[each.key]}-role"
+
+  # The rc-deploy deployment role may only create roles that carry the
+  # rc-permissions-boundary (least-privilege guard).
+  permissions_boundary = var.permissions_boundary_arn != "" ? var.permissions_boundary_arn : null
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -251,10 +255,11 @@ resource "aws_acm_certificate" "portal_domain" {
 resource "aws_route53_record" "cert_validation" {
   for_each = aws_acm_certificate.portal_domain
 
+  # domain_validation_options is a set, so it cannot be indexed directly
   zone_id = var.route53_zone_id
-  name    = each.value.domain_validation_options[0].resource_record_name
-  type    = each.value.domain_validation_options[0].resource_record_type
-  records = [each.value.domain_validation_options[0].resource_record_value]
+  name    = tolist(each.value.domain_validation_options)[0].resource_record_name
+  type    = tolist(each.value.domain_validation_options)[0].resource_record_type
+  records = [tolist(each.value.domain_validation_options)[0].resource_record_value]
   ttl     = 60
 }
 
@@ -293,7 +298,7 @@ resource "aws_route53_record" "portal_domain_alias" {
   type    = "A"
 
   alias {
-    name                   = each.value.domain_name_configuration[0].host_name
+    name                   = each.value.domain_name_configuration[0].target_domain_name
     zone_id                = each.value.domain_name_configuration[0].hosted_zone_id
     evaluate_target_health = false
   }
