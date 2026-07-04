@@ -12,6 +12,6 @@ key     = "rc/data-smart/portal-wrapper/terraform.tfstate"
 region  = "us-east-1"
 encrypt = true
 
-# State locking (optional; a single operator can skip both):
-#   use_lockfile = true                 # S3-native locking, requires Terraform >= 1.11
-#   dynamodb_table = "terraform-locks"  # older approach, needs a DynamoDB table
+# State locking via the Responsive Cities lock table (created by the
+# phila-mcp bootstrap). Prevents two concurrent applies from corrupting state.
+dynamodb_table = "rc-terraform-state-lock"
