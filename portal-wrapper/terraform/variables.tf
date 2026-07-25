@@ -121,3 +121,17 @@ variable "permissions_boundary_arn" {
   type        = string
   default     = ""
 }
+
+variable "reserved_concurrency" {
+  description = <<-EOT
+    Reserved concurrent executions per portal Lambda: bounds cost and stops one
+    portal from exhausting the account-wide pool.
+
+    Left at -1 (unset) because the Responsive Cities account's TOTAL Lambda
+    concurrency limit is 10 — the un-raised default — and AWS requires at least
+    10 unreserved, so no reservation is possible. Raise the "Concurrent
+    executions" quota (Service Quotas -> AWS Lambda), then set this to ~20-50.
+  EOT
+  type        = number
+  default     = -1
+}

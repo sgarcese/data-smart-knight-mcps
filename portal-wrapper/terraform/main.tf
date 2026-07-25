@@ -165,6 +165,15 @@ resource "aws_lambda_function" "mcp_server" {
   memory_size      = var.lambda_memory
   timeout          = var.lambda_timeout
 
+  # Bounds cost and stops one portal from exhausting the account-wide
+  # concurrency pool. See variables.tf — requires a raised account quota.
+  reserved_concurrent_executions = var.reserved_concurrency
+
+  # Continue traces into the function rather than stopping at the gateway.
+  tracing_config {
+    mode = "Active"
+  }
+
   environment {
     variables = {
       OPENCONTEXT_CONFIG = jsonencode(yamldecode(local_file.portal_config[each.key].content))
@@ -223,6 +232,15 @@ resource "aws_apigatewayv2_route" "default" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda[each.key].id}"
 }
 
+# Access log group per portal API. These endpoints are public and
+# unauthenticated, so these logs are the only record of who called them.
+resource "aws_cloudwatch_log_group" "api_access_logs" {
+  for_each = local.portal_map
+
+  name              = "/aws/apigateway/${local.portal_resource_name[each.key]}"
+  retention_in_days = var.log_retention_days
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   for_each    = local.portal_map
   api_id      = aws_apigatewayv2_api.mcp_server_api[each.key].id
@@ -232,6 +250,22 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
     throttling_rate_limit  = var.api_throttling_rate_limit
+  }
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_access_logs[each.key].arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      requestTime    = "$context.requestTime"
+      sourceIp       = "$context.identity.sourceIp"
+      userAgent      = "$context.identity.userAgent"
+      httpMethod     = "$context.httpMethod"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      responseLength = "$context.responseLength"
+      integrationErr = "$context.integrationErrorMessage"
+      latencyMs      = "$context.responseLatency"
+    })
   }
 }
 
