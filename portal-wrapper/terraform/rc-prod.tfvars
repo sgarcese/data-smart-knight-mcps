@@ -22,3 +22,8 @@ permissions_boundary_arn = "arn:aws:iam::564762345093:policy/rc-permissions-boun
 use_custom_domain = true
 base_domain       = "responsive.city"
 route53_zone_id   = "Z02890412WHZ405FIOT0Y"
+
+# Per-portal concurrency reservation so no single portal can starve the others.
+# Requires the account's Lambda "Concurrent executions" quota to accommodate
+# (number of portals x this value) with headroom left over.
+reserved_concurrency = 20
