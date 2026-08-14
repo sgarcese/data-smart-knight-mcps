@@ -3,6 +3,10 @@ portals:
     url: https://open-data.bouldercolorado.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: California
+    url: https://data.ca.gov
+    type: ckan
+    notes: "State of California open data CKAN portal supported by OpenContext."
   - city: Charlotte, NC
     url: https://data.charlottenc.gov
     type: arcgis
@@ -27,11 +31,19 @@ portals:
     url: https://data.lexingtonky.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Los Angeles, CA
+    url: https://data.lacity.org
+    type: socrata
+    notes: "Socrata portal supported by OpenContext."
   - city: Philadelphia, PA
     url: https://data-phl.opendata.arcgis.com
     type: arcgis
     warning: "This portal is incomplete — dataset coverage is partial and results may be missing or limited."
     notes: "Philadelphia geospatial open data ArcGIS Hub portal supported by OpenContext. Incomplete coverage."
+  - city: San Francisco, CA
+    url: https://data.sfgov.org
+    type: socrata
+    notes: "DataSF Socrata portal supported by OpenContext."
   - city: San Jose, CA
     url: https://data.sanjoseca.gov
     type: ckan
