@@ -31,6 +31,10 @@ portals:
     url: https://data.lexingtonky.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Long Beach, CA
+    url: https://data.longbeach.gov
+    type: opendatasoft
+    notes: "Opendatasoft Explore v2.1 portal supported by OpenContext."
   - city: Los Angeles, CA
     url: https://data.lacity.org
     type: socrata

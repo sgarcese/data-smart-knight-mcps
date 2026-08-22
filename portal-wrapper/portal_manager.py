@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 CONFIG_FILE = ROOT / "config" / "portal_definitions.yaml"
 TERRAFORM_DIR = ROOT / "terraform"
 
-SUPPORTED_TYPES = {"arcgis", "socrata", "ckan"}
+SUPPORTED_TYPES = {"arcgis", "socrata", "ckan", "opendatasoft"}
 REQUIRED_KEYS = ("city", "url", "type")
 ENVIRONMENTS = ("dev", "staging", "prod")
 

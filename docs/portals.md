@@ -12,6 +12,7 @@ These portal definitions cover the supported MCP portal sources for the current 
 | Hawaii | https://opendata.hawaii.gov | CKAN | Statewide. Supported by OpenContext.
 | Indiana | https://hub.mph.in.gov | CKAN | Management Performance Hub (statewide). Supported by OpenContext.
 | Lexington, KY | https://data.lexingtonky.gov | ArcGIS Hub | Supported by OpenContext.
+| Long Beach, CA | https://data.longbeach.gov | Opendatasoft | Explore v2.1. Supported by OpenContext.
 | Los Angeles, CA | https://data.lacity.org | Socrata | Supported by OpenContext. Requires a Socrata app token.
 | Philadelphia, PA | https://data-phl.opendata.arcgis.com | ArcGIS Hub | Geospatial portal. **Incomplete coverage** — carries a user-facing `warning`.
 | San Francisco, CA | https://data.sfgov.org | Socrata | DataSF. Supported by OpenContext. Requires a Socrata app token.
@@ -22,7 +23,7 @@ These portal definitions cover the supported MCP portal sources for the current 
 ## Definition fields
 
 Definitions live in `portal-wrapper/config/portal_definitions.yaml`. Required:
-`city`, `url`, `type` (`arcgis` | `socrata` | `ckan`). Optional: `notes`
+`city`, `url`, `type` (`arcgis` | `socrata` | `ckan` | `opendatasoft`). Optional: `notes`
 (internal only) and `warning` (appended to the MCP server description shown to
 users — use it to flag incomplete or limited portals, as with Philadelphia).
 
@@ -31,7 +32,6 @@ users — use it to flag incomplete or limited portals, as with Philadelphia).
 - Philadelphia, PA — the broader `opendataphilly.org` catalog uses JKAN
   (Jekyll-based) and is not supported by OpenContext. The separate ArcGIS Hub
   geospatial portal (`data-phl.opendata.arcgis.com`, listed above) is supported.
-- Long Beach, CA — `data.longbeach.gov` uses OpenDataSoft and is not supported by OpenContext.
 - "Cities by the Numbers" (California State Controller's Office), `cities.bythenumbers.sco.ca.gov` — runs on Tyler Technologies' "Socrata Perspectives" financial-transparency product (Tyler acquired Socrata in 2018; the UI still carries Socrata-branded CSS/template namespaces). It is not a standard Socrata Open Data Portal: it exposes its own bespoke `/api/*.json` and `.csv` endpoints rather than the SODA3 + Discovery API the `socrata` plugin talks to, so it is not supported by OpenContext without new plugin code.
 
 ## Usage

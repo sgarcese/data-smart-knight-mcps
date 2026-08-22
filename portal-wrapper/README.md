@@ -32,7 +32,7 @@ Each entry in `config/portal_definitions.yaml` supports:
 |-------|----------|---------|
 | `city` | yes | Display name and source of the derived slug. |
 | `url` | yes | Portal base URL. |
-| `type` | yes | One of `arcgis`, `socrata`, `ckan`. |
+| `type` | yes | One of `arcgis`, `socrata`, `ckan`, `opendatasoft`. |
 | `warning` | no | Appended to the user-facing MCP server description (e.g. flag incomplete coverage). Surfaces in Claude's connector list and to the model. |
 | `notes` | no | Internal documentation only; never reaches users. |
 
