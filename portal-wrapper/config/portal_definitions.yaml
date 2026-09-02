@@ -60,3 +60,7 @@ portals:
     url: https://gisportal-wpbgis.opendata.arcgis.com
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: HUD
+    url: https://hudgis-hud.opendata.arcgis.com
+    type: arcgis
+    notes: "U.S. Department of Housing and Urban Development (federal agency) ArcGIS Hub portal supported by OpenContext."

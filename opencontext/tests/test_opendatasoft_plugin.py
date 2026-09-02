@@ -5,6 +5,7 @@ interactions, ODSQL validation, error handling, and data formatting. All
 network access is mocked; no live portal is contacted.
 """
 
+from typing import ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -342,8 +343,8 @@ class TestSearchDatasets:
         assert "Theme: Public Safety" in text
         assert "Records: 4321" in text
         assert "https://data.longbeach.gov/explore/dataset/police-calls/" in text
-        assert "..." in text  # description truncated
-        assert "Use get_dataset tool" in text
+        assert "…[truncated" in text  # description truncated
+        assert "Use the get_dataset tool" in text
 
     @pytest.mark.asyncio
     async def test_search_datasets_empty_results_message(self):
@@ -425,7 +426,7 @@ class TestGetDatasetAndSchema:
             "Portal URL: https://data.longbeach.gov/explore/dataset/police-calls/"
             in text
         )
-        assert "Use get_schema" in text
+        assert "Use the get_schema" in text
 
     @pytest.mark.asyncio
     async def test_get_schema_tool_formats_fields(self):
@@ -449,7 +450,7 @@ class TestGetDatasetAndSchema:
         """Test the empty-schema message."""
         plugin, _ = _initialized_plugin(get_return={"dataset_id": "x", "fields": []})
         result = await plugin.execute_tool("get_schema", {"dataset_id": "x"})
-        assert result.content[0]["text"] == "No schema information available."
+        assert "No schema information available." in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_http_404_produces_descriptive_error(self):
@@ -550,7 +551,7 @@ class TestQueryData:
         """Test the empty-records message."""
         plugin, _ = _initialized_plugin(get_return={"total_count": 0, "results": []})
         result = await plugin.execute_tool("query_data", {"dataset_id": "d"})
-        assert result.content[0]["text"] == "No records found matching the query."
+        assert "No records found matching the query." in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_query_data_rejects_malicious_where(self):
@@ -750,9 +751,7 @@ class TestAggregateData:
         result = await plugin.execute_tool(
             "aggregate_data", {"dataset_id": "d", "metrics": {"total": "count(*)"}}
         )
-        assert result.content[0]["text"] == (
-            "No records found matching the aggregation."
-        )
+        assert "No records found matching the aggregation." in result.content[0]["text"]
 
 
 class TestAggregateDataSecurity:
@@ -871,8 +870,9 @@ class TestListCategories:
         """Test the empty-categories message."""
         plugin, _ = _initialized_plugin(get_return={"facets": []})
         result = await plugin.execute_tool("list_categories", {})
-        assert result.content[0]["text"] == (
+        assert (
             "No categories found on Long Beach's open data portal."
+            in result.content[0]["text"]
         )
 
 
@@ -924,7 +924,10 @@ class TestAggregateWithoutGroupBy:
         plugin._initialized = True
         mock_client = AsyncMock()
         mock_response = Mock()
-        mock_response.json.return_value = {"total_count": 1728, "results": [{"n": 1728}]}
+        mock_response.json.return_value = {
+            "total_count": 1728,
+            "results": [{"n": 1728}],
+        }
         mock_response.raise_for_status = Mock()
         mock_client.get = AsyncMock(return_value=mock_response)
         plugin.client = mock_client
@@ -933,7 +936,9 @@ class TestAggregateWithoutGroupBy:
         assert result.get("error") is not True
         assert mock_client.get.call_args[1]["params"]["limit"] == 1
 
-        await plugin.aggregate_data("ds", metrics={"n": "count(*)"}, group_by=["f"], limit=50)
+        await plugin.aggregate_data(
+            "ds", metrics={"n": "count(*)"}, group_by=["f"], limit=50
+        )
         assert mock_client.get.call_args[1]["params"]["limit"] == 50
 
 
@@ -977,9 +982,7 @@ class TestDatasetIdValidation:
     @pytest.mark.asyncio
     async def test_query_and_aggregate_also_guarded(self):
         plugin, _ = self._plugin()
-        r = await plugin.execute_tool(
-            "query_data", {"dataset_id": "../x", "limit": 1}
-        )
+        r = await plugin.execute_tool("query_data", {"dataset_id": "../x", "limit": 1})
         assert r.success is False
         r = await plugin.execute_tool(
             "aggregate_data", {"dataset_id": "../x", "metrics": {"n": "count(*)"}}
@@ -1001,7 +1004,10 @@ class TestCodeReviewFixes:
         plugin._initialized = True
         mock_client = AsyncMock()
         mock_response = Mock()
-        mock_response.json.return_value = get_return or {"total_count": 0, "results": []}
+        mock_response.json.return_value = get_return or {
+            "total_count": 0,
+            "results": [],
+        }
         mock_response.raise_for_status = Mock()
         mock_client.get = AsyncMock(return_value=mock_response)
         plugin.client = mock_client
@@ -1048,3 +1054,56 @@ class TestCodeReviewFixes:
         result = await plugin.aggregate_data("d", metrics={"n": "count()"})
         assert result.get("error") is True
         assert "metric expression" in result["message"]
+
+
+class TestMetadataEnrichment:
+    ENRICHED: ClassVar[dict] = {
+        "dataset_id": "police-calls",
+        "metas": {
+            "default": {
+                "title": "Police Calls",
+                "description": "Dispatch calls",
+                "records_count": 4321,
+                "modified": "2026-01-15T08:00:00+00:00",
+                "data_processed": "2026-01-16T01:00:00+00:00",
+                "metadata_processed": "2026-01-14",
+                "publisher": "Long Beach PD",
+                "license": "Open Database License",
+                "license_url": "https://opendatacommons.org/licenses/odbl/",
+                "attributions": ["LBPD", "City of Long Beach"],
+                "references": "https://data.longbeach.gov/pages/police/",
+                "theme": ["Public Safety"],
+            }
+        },
+        "fields": [{"name": "a"}, {"name": "b"}],
+    }
+
+    def test_format_dataset_surfaces_publisher_license_dates(self):
+        plugin, _ = _initialized_plugin()
+        out = plugin._format_dataset(self.ENRICHED)
+        assert "Publisher: Long Beach PD" in out
+        assert "License: Open Database License — (external: opendatacommons.org)" in out
+        assert "Attribution: LBPD, City of Long Beach" in out
+        assert (
+            "Last modified: 2026-01-15 | Data processed: 2026-01-16 | "
+            "Metadata processed: 2026-01-14"
+        ) in out
+        assert "Records: 4321 | Fields: 2" in out
+        assert "References: https://data.longbeach.gov/pages/police/" in out
+
+    def test_search_results_header_and_facts(self):
+        plugin, _ = _initialized_plugin()
+        out = plugin._format_search_results([self.ENRICHED], total=88)
+        assert out.startswith(
+            "Found 88 matching dataset(s) in Long Beach's open data portal (showing 1-1):"
+        )
+        assert "Publisher: Long Beach PD | Modified: 2026-01-15 | Records: 4321" in out
+
+    @pytest.mark.asyncio
+    async def test_search_tool_uses_total_count(self):
+        plugin, _ = _initialized_plugin(
+            get_return={"total_count": 88, "results": [self.ENRICHED]}
+        )
+        result = await plugin.execute_tool("search_datasets", {"query": "police"})
+        assert result.success
+        assert "Found 88 matching dataset(s)" in result.content[0]["text"]
