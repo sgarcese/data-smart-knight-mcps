@@ -101,9 +101,13 @@ variable "plugin_timeout" {
 variable "portal_app_tokens" {
   description = <<-EOT
     Per-portal secret API tokens, keyed by portal slug (e.g. "detroit-mi").
-    Socrata portals require an app token; CKAN/ArcGIS may use one for
-    authenticated access. Supply via a tfvars file or TF_VAR_portal_app_tokens
-    rather than committing it. Held in state, so use an encrypted remote backend.
+    Socrata portals require an App Token (Developer Settings -> App Tokens,
+    or dev.socrata.com/register) — NOT the Key ID from an API Key pair
+    (Developer Settings -> API Keys). A bare Key ID passes catalog
+    search/metadata calls but fails query_dataset with "Invalid app_token
+    specified" (403). CKAN/ArcGIS may use a token for authenticated access.
+    Supply via a tfvars file or TF_VAR_portal_app_tokens rather than
+    committing it. Held in state, so use an encrypted remote backend.
   EOT
   type        = map(string)
   default     = {}

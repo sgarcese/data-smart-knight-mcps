@@ -14,6 +14,8 @@ These portal definitions cover the supported MCP portal sources for the current 
 | Lexington, KY | https://data.lexingtonky.gov | ArcGIS Hub | Supported by OpenContext.
 | Long Beach, CA | https://data.longbeach.gov | Opendatasoft | Explore v2.1. Supported by OpenContext.
 | Los Angeles, CA | https://data.lacity.org | Socrata | Supported by OpenContext. Requires a Socrata app token.
+| New York | https://data.ny.gov | Socrata | Statewide. Supported by OpenContext. Requires a Socrata app token.
+| New York City, NY | https://data.cityofnewyork.us | Socrata | Supported by OpenContext. Requires a Socrata app token.
 | Philadelphia, PA | https://data-phl.opendata.arcgis.com | ArcGIS Hub | Geospatial portal. **Incomplete coverage** — carries a user-facing `warning`.
 | San Francisco, CA | https://data.sfgov.org | Socrata | DataSF. Supported by OpenContext. Requires a Socrata app token.
 | San Jose, CA | https://data.sanjoseca.gov | CKAN | Supported by OpenContext.
@@ -26,6 +28,30 @@ Definitions live in `portal-wrapper/config/portal_definitions.yaml`. Required:
 `city`, `url`, `type` (`arcgis` | `socrata` | `ckan` | `opendatasoft`). Optional: `notes`
 (internal only) and `warning` (appended to the MCP server description shown to
 users — use it to flag incomplete or limited portals, as with Philadelphia).
+
+## Socrata credentials: App Token, not API Key
+
+Socrata portals (`type: socrata`) require a credential in `portal_app_tokens`
+(`portal-wrapper/terraform/secret.auto.tfvars`, gitignored). Socrata's
+developer console issues two different credential types — only one of them
+works here:
+
+- **App Token** — a single string from a portal's *Developer Settings → App
+  Tokens* (or `dev.socrata.com/register`). This is what's required: the
+  plugin (`opencontext/plugins/socrata/plugin.py`) sends it bare as the
+  `X-App-Token` header.
+- **API Key (Key ID + Key Secret)** — a newer credential *pair* from
+  *Developer Settings → API Keys*, meant for HTTP Basic Auth on authenticated
+  requests (writes, private datasets). The plugin does not implement Basic
+  Auth. Pasting only the Key ID in as if it were an App Token will look like
+  it works for catalog search and dataset metadata, but fails with
+  `"Invalid app_token specified"` (HTTP 403) on the actual data-query
+  endpoint (`/resource/{id}.json`) that `query_dataset` uses — i.e. it fails
+  silently for some tools and not others. Confirmed on data.ny.gov,
+  data.cityofnewyork.us, data.lacity.org, and data.sfgov.org.
+- No secret/private key is needed for these portals — all datasets are
+  public, so the bare App Token is sufficient. No plugin auth changes are
+  needed either.
 
 ## Unsupported / skipped sources
 

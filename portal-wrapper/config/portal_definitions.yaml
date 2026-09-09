@@ -39,6 +39,14 @@ portals:
     url: https://data.lacity.org
     type: socrata
     notes: "Socrata portal supported by OpenContext."
+  - city: New York
+    url: https://data.ny.gov
+    type: socrata
+    notes: "State of New York open data Socrata portal supported by OpenContext."
+  - city: New York City, NY
+    url: https://data.cityofnewyork.us
+    type: socrata
+    notes: "NYC Open Data Socrata portal supported by OpenContext."
   - city: Philadelphia, PA
     url: https://data-phl.opendata.arcgis.com
     type: arcgis
