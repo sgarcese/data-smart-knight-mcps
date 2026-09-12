@@ -1,4 +1,8 @@
 portals:
+  - city: Austin, TX
+    url: https://data.austintexas.gov
+    type: socrata
+    notes: "Socrata portal supported by OpenContext."
   - city: Boulder, CO
     url: https://open-data.bouldercolorado.gov
     type: arcgis
@@ -60,10 +64,22 @@ portals:
     url: https://data.sanjoseca.gov
     type: ckan
     notes: "CKAN portal supported by OpenContext."
+  - city: Sarasota County, FL
+    url: https://data-sarco.opendata.arcgis.com
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
   - city: St. Paul, MN
     url: https://information.stpaul.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Texas
+    url: https://data.texas.gov
+    type: socrata
+    notes: "State of Texas open data Socrata portal supported by OpenContext."
+  - city: Washington
+    url: https://data.wa.gov
+    type: socrata
+    notes: "State of Washington open data Socrata portal supported by OpenContext."
   - city: West Palm Beach, FL
     url: https://gisportal-wpbgis.opendata.arcgis.com
     type: arcgis

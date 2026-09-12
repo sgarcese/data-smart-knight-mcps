@@ -4,12 +4,14 @@ These portal definitions cover the supported MCP portal sources for the current 
 
 | City | Portal URL | Portal Type | Notes |
 |------|------------|-------------|-------|
+| Austin, TX | https://data.austintexas.gov | Socrata | Supported by OpenContext. Requires a Socrata app token.
 | Boulder, CO | https://open-data.bouldercolorado.gov | ArcGIS Hub | Supported by OpenContext.
 | California | https://data.ca.gov | CKAN | Statewide. Supported by OpenContext.
 | Charlotte, NC | https://data.charlottenc.gov | ArcGIS Hub | Supported by OpenContext.
 | Columbia, SC | https://coc-colacitygis.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
 | Detroit, MI | https://data.detroitmi.gov | ArcGIS Hub | Supported by OpenContext.
 | Hawaii | https://opendata.hawaii.gov | CKAN | Statewide. Supported by OpenContext.
+| HUD | https://hudgis-hud.opendata.arcgis.com | ArcGIS Hub | Federal agency (U.S. Dept. of Housing and Urban Development). Supported by OpenContext.
 | Indiana | https://hub.mph.in.gov | CKAN | Management Performance Hub (statewide). Supported by OpenContext.
 | Lexington, KY | https://data.lexingtonky.gov | ArcGIS Hub | Supported by OpenContext.
 | Long Beach, CA | https://data.longbeach.gov | Opendatasoft | Explore v2.1. Supported by OpenContext.
@@ -19,7 +21,10 @@ These portal definitions cover the supported MCP portal sources for the current 
 | Philadelphia, PA | https://data-phl.opendata.arcgis.com | ArcGIS Hub | Geospatial portal. **Incomplete coverage** — carries a user-facing `warning`.
 | San Francisco, CA | https://data.sfgov.org | Socrata | DataSF. Supported by OpenContext. Requires a Socrata app token.
 | San Jose, CA | https://data.sanjoseca.gov | CKAN | Supported by OpenContext.
+| Sarasota County, FL | https://data-sarco.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
 | St. Paul, MN | https://information.stpaul.gov | ArcGIS Hub | Supported by OpenContext.
+| Texas | https://data.texas.gov | Socrata | Statewide. Supported by OpenContext. Requires a Socrata app token.
+| Washington | https://data.wa.gov | Socrata | Statewide. Supported by OpenContext. Requires a Socrata app token.
 | West Palm Beach, FL | https://gisportal-wpbgis.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
 
 ## Definition fields
