@@ -19,7 +19,7 @@ These portal definitions cover the supported MCP portal sources for the current 
 | New York | https://data.ny.gov | Socrata | Statewide. Supported by OpenContext. Requires a Socrata app token.
 | New York City, NY | https://data.cityofnewyork.us | Socrata | Supported by OpenContext. Requires a Socrata app token.
 | Philadelphia, PA | https://data-phl.opendata.arcgis.com | ArcGIS Hub | Geospatial portal. **Incomplete coverage** — carries a user-facing `warning`.
-| San Francisco, CA | https://data.sfgov.org | Socrata | DataSF. Supported by OpenContext. Requires a Socrata app token.
+| San Francisco, CA | https://data.sf.gov | Socrata | DataSF. Supported by OpenContext. Requires a Socrata app token. Migrated from data.sfgov.org (2026-09); the old domain now 301s every API path, which the plugin doesn't follow.
 | San Jose, CA | https://data.sanjoseca.gov | CKAN | Supported by OpenContext.
 | Sarasota County, FL | https://data-sarco.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
 | St. Paul, MN | https://information.stpaul.gov | ArcGIS Hub | Supported by OpenContext.

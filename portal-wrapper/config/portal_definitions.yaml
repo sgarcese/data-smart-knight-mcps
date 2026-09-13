@@ -57,9 +57,9 @@ portals:
     warning: "This portal is incomplete — dataset coverage is partial and results may be missing or limited."
     notes: "Philadelphia geospatial open data ArcGIS Hub portal supported by OpenContext. Incomplete coverage."
   - city: San Francisco, CA
-    url: https://data.sfgov.org
+    url: https://data.sf.gov
     type: socrata
-    notes: "DataSF Socrata portal supported by OpenContext."
+    notes: "DataSF Socrata portal supported by OpenContext. Migrated from data.sfgov.org (which now 301-redirects every API path here)."
   - city: San Jose, CA
     url: https://data.sanjoseca.gov
     type: ckan
