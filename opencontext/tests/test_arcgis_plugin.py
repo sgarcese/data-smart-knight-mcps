@@ -495,8 +495,13 @@ class TestGetSchema:
 
             await plugin.get_schema("abc123")
 
-        url_called = plugin.feature_client.get.call_args[0][0]
-        assert "/FeatureServer/0?f=json" in url_called
+        call = plugin.feature_client.get.call_args
+        url_called = call[0][0]
+        assert url_called.endswith("/FeatureServer/0")
+        # f=json is sent via `params`, not baked into the URL string — ArcGIS
+        # answers with HTML instead of JSON if the URL already carries its own
+        # query string and `params` is also passed (double query-string bug).
+        assert call.kwargs.get("params") == {"f": "json"}
 
     @pytest.mark.asyncio
     async def test_get_schema_no_service_url_raises(self, arcgis_config):

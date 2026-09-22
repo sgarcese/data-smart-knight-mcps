@@ -52,23 +52,26 @@ class TestPluginInitialization:
             assert mock_client.get.called
 
     @pytest.mark.asyncio
-    async def test_plugin_initialization_fails_with_missing_app_token(
+    async def test_plugin_initialization_succeeds_with_missing_app_token(
         self, socrata_config
     ):
-        """Test that plugin initialization fails when app token is missing."""
+        """An app token is optional (upstream #26): portals such as
+        data.cdc.gov serve untokened requests but reject an invalid token
+        (403), so a missing token means "send no X-App-Token header", not
+        "refuse to start"."""
         del socrata_config["app_token"]
-        # Config schema will raise on validation - we need invalid config
-        with pytest.raises(Exception):
-            SocrataPlugin(socrata_config)
+        plugin = SocrataPlugin(socrata_config)
+        assert plugin.plugin_config.app_token is None
 
     @pytest.mark.asyncio
-    async def test_plugin_initialization_fails_with_empty_app_token(
+    async def test_plugin_initialization_succeeds_with_empty_app_token(
         self, socrata_config
     ):
-        """Test that plugin initialization fails when app token is empty."""
+        """A blank app token normalizes to None (no header sent), same as a
+        missing one."""
         socrata_config["app_token"] = ""
-        with pytest.raises(Exception):
-            SocrataPlugin(socrata_config)
+        plugin = SocrataPlugin(socrata_config)
+        assert plugin.plugin_config.app_token is None
 
     @pytest.mark.asyncio
     async def test_plugin_initialization_includes_app_token_header(
