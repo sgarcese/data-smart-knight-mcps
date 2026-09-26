@@ -5,16 +5,18 @@ via the OGC API - Records (Hub Search API) and ArcGIS Feature Services.
 """
 
 import ipaddress
+import json
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-from core.base_plugin import HTTP_RETRY, BaseOpenDataPlugin, ToolHandler
+from core.base_plugin import HTTP_RETRY, ROW_FORMATS, BaseOpenDataPlugin, ToolHandler
 from core.interfaces import PluginType, ToolDefinition, ToolResult
-from core.portal_content import join_cleaned
+from core.portal_content import html_to_text, join_cleaned
 from plugins.arcgis.config_schema import ArcGISPluginConfig
 from plugins.arcgis.where_validator import WhereValidator
 
@@ -25,6 +27,24 @@ logger = logging.getLogger(__name__)
 _ARCGIS_SERVICE_PATH = re.compile(
     r"/rest/services/.+/(FeatureServer|MapServer)(/\d+)?/?$", re.IGNORECASE
 )
+# A FeatureServer/MapServer URL split into its service root and optional
+# layer id (``.../FeatureServer`` + ``4``).
+_SERVICE_ROOT = re.compile(
+    r"^(?P<root>.+/(?:FeatureServer|MapServer))(?:/(?P<layer>\d+))?/?$",
+    re.IGNORECASE,
+)
+# Character budget for a dataset description in get_dataset (HUD's Fair
+# Market Rents description is about 3,500 characters).
+DESCRIPTION_MAX = 12_000
+# Coded domain values listed per field in get_schema.
+_MAX_DOMAIN_VALUES = 30
+# Statistic types accepted by aggregate_data (ArcGIS ``statisticType``).
+STATISTIC_TYPES = ("count", "sum", "avg", "min", "max", "stddev")
+# A plain field name or output alias.
+_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+# Upper bounds on aggregate_data inputs.
+_MAX_STATISTICS = 20
+_MAX_GROUP_BY = 10
 # Hostname suffixes that are never valid public service hosts.
 _BLOCKED_HOST_SUFFIXES = (".local", ".localhost", ".internal", ".localdomain")
 
@@ -40,7 +60,7 @@ class ArcGISPlugin(BaseOpenDataPlugin):
 
     plugin_name = "arcgis"
     plugin_type = PluginType.OPEN_DATA
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.0"
 
     config_class = ArcGISPluginConfig
     # Hub item IDs are 32-char hex; allow the underscore/hyphen variants seen
@@ -59,6 +79,10 @@ class ArcGISPlugin(BaseOpenDataPlugin):
         super().__init__(config)
         # service root URL -> resolved layer URL (see _resolve_layer_url)
         self._layer_url_cache: dict[str, str] = {}
+        # service root URL -> its layers and tables (see _service_layers)
+        self._service_layers_cache: dict[str, list[dict[str, Any]]] = {}
+        # layer URL -> layer metadata ({layer_url}?f=json, see _layer_metadata)
+        self._layer_metadata_cache: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> bool:
         """Initialize ArcGIS Hub plugin and test connection.
@@ -244,6 +268,15 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                             "type": "string",
                             "description": "Hub item ID (same as get_dataset)",
                         },
+                        "layer": {
+                            "type": "integer",
+                            "description": (
+                                "Layer or table id within the Feature Service, as "
+                                "listed by get_dataset. Default: the layer the item "
+                                "points to, or the service's first layer."
+                            ),
+                            "minimum": 0,
+                        },
                     },
                     "required": ["dataset_id"],
                 },
@@ -254,7 +287,10 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                     "Query records from an ArcGIS Feature Service. Provide the Hub "
                     "dataset ID — the plugin resolves the Feature Service URL "
                     "automatically (two-hop). Use get_dataset first to confirm the "
-                    "dataset has a queryable service URL."
+                    "dataset has a queryable service URL. The reply gives the "
+                    "total number of matching records and, when more remain, the "
+                    "offset for the next page. Use format json or csv for rows "
+                    "you will compute with, and order_by for stable paging."
                 ),
                 input_schema={
                     "type": "object",
@@ -262,6 +298,15 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                         "dataset_id": {
                             "type": "string",
                             "description": "Hub item ID (same as get_dataset)",
+                        },
+                        "layer": {
+                            "type": "integer",
+                            "description": (
+                                "Layer or table id within the Feature Service, as "
+                                "listed by get_dataset. Default: the layer the item "
+                                "points to, or the service's first layer."
+                            ),
+                            "minimum": 0,
                         },
                         "where": {
                             "type": "string",
@@ -280,8 +325,127 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                             "minimum": 1,
                             "maximum": 1000,
                         },
+                        "offset": {
+                            "type": "integer",
+                            "description": (
+                                "Number of matching records to skip, for paging "
+                                "(default: 0)"
+                            ),
+                            "default": 0,
+                            "minimum": 0,
+                        },
+                        "order_by": {
+                            "type": "string",
+                            "description": (
+                                "Comma-separated field names to sort by, each "
+                                'optionally followed by ASC or DESC (e.g. "COUNTY, '
+                                'UNITS DESC")'
+                            ),
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": list(ROW_FORMATS),
+                            "description": (
+                                "Output format: text (readable records, default), "
+                                "json (array of objects), or csv (header plus one "
+                                "line per record)"
+                            ),
+                            "default": "text",
+                        },
                     },
                     "required": ["dataset_id"],
+                },
+            ),
+            ToolDefinition(
+                name="aggregate_data",
+                description=(
+                    "Compute statistics (count, sum, avg, min, max, stddev) on an "
+                    "ArcGIS Feature Service layer, optionally grouped by fields, in "
+                    "one server-side call. Use it for totals and counts by area "
+                    "instead of paging through query_data. Null values are left out "
+                    "of every statistic, so a sum over a field with suppressed "
+                    "values is a lower bound. Use get_schema first for field names."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "dataset_id": {
+                            "type": "string",
+                            "description": "Hub item ID (same as get_dataset)",
+                        },
+                        "layer": {
+                            "type": "integer",
+                            "description": (
+                                "Layer or table id within the Feature Service, as "
+                                "listed by get_dataset. Default: the layer the item "
+                                "points to, or the service's first layer."
+                            ),
+                            "minimum": 0,
+                        },
+                        "statistics": {
+                            "type": "array",
+                            "description": (
+                                "Statistics to compute, e.g. "
+                                '[{"type": "sum", "field": "HCV_PUBLIC", "as": '
+                                '"vouchers"}, {"type": "count", "field": "GEOID"}]. '
+                                "count may omit field to count records."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": list(STATISTIC_TYPES),
+                                    },
+                                    "field": {"type": "string"},
+                                    "as": {"type": "string"},
+                                },
+                                "required": ["type"],
+                            },
+                            "minItems": 1,
+                            "maxItems": _MAX_STATISTICS,
+                        },
+                        "group_by": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Fields to group by (one row per group)",
+                            "maxItems": _MAX_GROUP_BY,
+                        },
+                        "where": {
+                            "type": "string",
+                            "description": "SQL WHERE clause applied before grouping",
+                            "default": "1=1",
+                        },
+                        "having": {
+                            "type": "string",
+                            "description": (
+                                "Filter on the computed statistics, e.g. "
+                                '"SUM(HCV_PUBLIC) > 100" (only on services that '
+                                "support it)"
+                            ),
+                        },
+                        "order_by": {
+                            "type": "string",
+                            "description": (
+                                "Sort by group fields or statistic names, each "
+                                'optionally ASC or DESC (e.g. "vouchers DESC")'
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of groups (default: 1000)",
+                            "default": 1000,
+                            "minimum": 1,
+                            "maximum": 5000,
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": list(ROW_FORMATS),
+                            "description": "Output format: text, json or csv",
+                            "default": "text",
+                        },
+                    },
+                    "required": ["dataset_id", "statistics"],
                 },
             ),
         ]
@@ -306,7 +470,8 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                 required_args=("dataset_id",),
                 guidance=(
                     "Use the get_schema tool with this dataset's ID to list "
-                    "fields, then query_data to query features."
+                    "fields, then query_data to query features. Pass layer to "
+                    "reach a layer or table other than the default."
                 ),
             ),
             "get_aggregations": ToolHandler(
@@ -317,6 +482,15 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             ),
             "query_data": ToolHandler(
                 handler=self._tool_query_data, required_args=("dataset_id",)
+            ),
+            "aggregate_data": ToolHandler(
+                handler=self._tool_aggregate_data,
+                required_args=("dataset_id", "statistics"),
+                guidance=(
+                    "Statistics ignore null values: where a source suppresses "
+                    "small counts as null, a sum is a lower bound and a count of "
+                    "a field counts only non-null values."
+                ),
             ),
         }
 
@@ -338,6 +512,7 @@ class ArcGISPlugin(BaseOpenDataPlugin):
 
     async def _tool_get_dataset(self, arguments: dict[str, Any]) -> ToolResult:
         dataset = await self.get_dataset(arguments["dataset_id"])
+        await self._add_service_details(dataset)
         return ToolResult(
             content=[{"type": "text", "text": self._format_dataset(dataset)}],
             success=True,
@@ -355,7 +530,9 @@ class ArcGISPlugin(BaseOpenDataPlugin):
         )
 
     async def _tool_get_schema(self, arguments: dict[str, Any]) -> ToolResult:
-        schema = await self.get_schema(arguments["dataset_id"])
+        schema = await self.get_schema(
+            arguments["dataset_id"], layer=arguments.get("layer")
+        )
         return ToolResult(
             content=[{"type": "text", "text": self._format_schema(schema)}],
             success=True,
@@ -366,11 +543,50 @@ class ArcGISPlugin(BaseOpenDataPlugin):
         where = arguments.get("where", "1=1")
         out_fields = arguments.get("out_fields", "*")
         limit = arguments.get("limit", 100)
-        records = await self._query_features(dataset_id, where, out_fields, limit)
+        offset = arguments.get("offset", 0)
+        order_by = arguments.get("order_by")
+        fmt = arguments.get("format") or "text"
+        if fmt not in ROW_FORMATS:
+            raise ValueError(
+                f"format must be one of {', '.join(ROW_FORMATS)} (got {fmt!r})"
+            )
+        page = await self._query_page(
+            dataset_id,
+            where,
+            out_fields,
+            limit,
+            offset=offset,
+            order_by=order_by,
+            layer=arguments.get("layer"),
+        )
         return ToolResult(
             content=[
-                {"type": "text", "text": self._format_query_results(records, limit)}
+                {
+                    "type": "text",
+                    "text": self._format_query_results(page, limit, fmt=fmt),
+                }
             ],
+            success=True,
+        )
+
+    async def _tool_aggregate_data(self, arguments: dict[str, Any]) -> ToolResult:
+        fmt = arguments.get("format") or "text"
+        if fmt not in ROW_FORMATS:
+            raise ValueError(
+                f"format must be one of {', '.join(ROW_FORMATS)} (got {fmt!r})"
+            )
+        result = await self.aggregate_features(
+            arguments["dataset_id"],
+            arguments["statistics"],
+            group_by=arguments.get("group_by"),
+            where=arguments.get("where", "1=1"),
+            having=arguments.get("having"),
+            order_by=arguments.get("order_by"),
+            limit=arguments.get("limit", 1000),
+            layer=arguments.get("layer"),
+        )
+        return ToolResult(
+            content=[{"type": "text", "text": self._format_aggregate(result, fmt=fmt)}],
             success=True,
         )
 
@@ -428,8 +644,8 @@ class ArcGISPlugin(BaseOpenDataPlugin):
         result = self._extract_dataset_summary(props)
         result.update(
             {
-                "snippet": props.get("snippet", ""),
-                "licenseInfo": props.get("licenseInfo", ""),
+                "snippet": html_to_text(props.get("snippet")),
+                "licenseInfo": html_to_text(props.get("licenseInfo")),
                 "spatialReference": props.get("spatialReference", ""),
                 "geometryType": props.get("geometryType", ""),
                 "additionalResources": props.get("additionalResources", []),
@@ -442,26 +658,68 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                 "lastEditDate": self.short_date(
                     props.get("serviceLastEditDate") or props.get("lastEditDate")
                 ),
-                "accessInformation": props.get("accessInformation", ""),
+                "accessInformation": html_to_text(props.get("accessInformation")),
             }
         )
         return result
 
-    async def get_schema(self, dataset_id: str) -> list[dict[str, Any]]:
+    async def get_schema(
+        self, dataset_id: str, *, layer: int | None = None
+    ) -> list[dict[str, Any]]:
         """Get field schema for a dataset's Feature Service layer.
 
         Resolves the Feature Service URL via :meth:`get_dataset` (two-hop),
-        then fetches the layer metadata (``{service_url}/0?f=json``) and
+        then fetches the layer metadata (``{layer_url}?f=json``) and
         returns the ``fields`` list (name, type, alias).
 
         Args:
             dataset_id: Hub item ID
+            layer: Layer or table id within the service; ``None`` uses the
+                default layer (see :meth:`_resolve_layer_url`).
 
         Returns:
-            List of field definition dictionaries (name, type, alias)
+            List of field definition dictionaries (name, type, alias, plus
+            ``length`` for string fields and ``domain`` when the service
+            defines them)
 
         Raises:
             ValueError: If the dataset has no queryable service URL.
+        """
+        layer_url, _ = await self._layer_url_for(dataset_id, layer)
+        fields, _ = await self._layer_fields(layer_url)
+        schema = []
+        for f in fields:
+            entry = {
+                "name": f.get("name", ""),
+                "type": f.get("type", ""),
+                "alias": f.get("alias", ""),
+            }
+            if isinstance(f.get("length"), int) and f.get("type") == (
+                "esriFieldTypeString"
+            ):
+                entry["length"] = f["length"]
+            if isinstance(f.get("domain"), dict):
+                entry["domain"] = f["domain"]
+            schema.append(entry)
+        return schema
+
+    async def _layer_url_for(
+        self, dataset_id: str, layer: int | None, *, queryable_only: bool = False
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve a Hub item to a trusted layer URL (two-hop).
+
+        Args:
+            dataset_id: Hub item ID.
+            layer: Layer or table id, or ``None`` for the default layer.
+            queryable_only: Refuse item types outside :attr:`QUERYABLE_TYPES`.
+
+        Returns:
+            ``(layer_url, dataset)``: the validated layer URL
+            (``.../FeatureServer/<id>``) and the item metadata.
+
+        Raises:
+            ValueError: If the item has no service URL, is not a queryable
+                type, its host is not trusted, or ``layer`` is invalid.
         """
         dataset = await self.get_dataset(dataset_id)
         service_url = dataset.get("service_url")
@@ -469,41 +727,64 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             raise ValueError(
                 f"Dataset {dataset_id} does not have a queryable Feature Service URL"
             )
-
+        ds_type = dataset.get("type", "")
+        if queryable_only and ds_type and ds_type not in self.QUERYABLE_TYPES:
+            raise ValueError(
+                f"Dataset type '{ds_type}' is not queryable. "
+                f"query_data only supports: {', '.join(sorted(self.QUERYABLE_TYPES))}."
+            )
         service_url = self._validate_feature_url(
             service_url,
             self.plugin_config.portal_url,
             self.plugin_config.trusted_service_hosts,
             auto_trust=self.plugin_config.auto_trust_hub_services,
         )
-        layer_url = await self._resolve_layer_url(service_url)
+        return await self._resolve_layer_url(service_url, layer), dataset
 
+    async def _layer_fields(
+        self, layer_url: str
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Return a layer's ``fields`` and its raw metadata.
+
+        Reads ``{layer_url}?f=json``; when that body is unusable, the fields
+        come from a one-row query and the metadata is ``{}``.
+        """
+        metadata = await self._layer_metadata(layer_url)
+        if metadata is not None:
+            return metadata["fields"], metadata
+        # Some self-hosted services return HTML or a malformed body on the
+        # layer metadata endpoint while the query endpoint works (seen on
+        # Columbus and Indianapolis). Derive the schema from a one-row query
+        # instead of failing.
+        logger.warning(
+            "Layer metadata at %s was not usable; deriving schema from a 1-row query",
+            layer_url,
+        )
+        return await self._schema_from_query(layer_url), {}
+
+    async def _layer_metadata(self, layer_url: str) -> dict[str, Any] | None:
+        """Read ``{layer_url}?f=json``; ``None`` when the body is unusable.
+
+        Usable bodies (JSON with a ``fields`` list and no error envelope) are
+        cached per layer URL, so the data edit date is available to later
+        queries without another request.
+
+        Raises:
+            RuntimeError: On HTTP errors (via :meth:`_call_feature_service`).
+        """
+        cached = self._layer_metadata_cache.get(layer_url)
+        if cached is not None:
+            return cached
         # The format must travel as a query parameter: httpx replaces the
         # URL's own query string with ``params``, so ``{url}?f=json`` plus
         # ``params={}`` sent a bare request and ArcGIS answered with an HTML
         # page ("Expecting value: line 1 column 1" on every dataset).
         response = await self._call_feature_service(layer_url, {"f": "json"})
-
-        fields = self._fields_from_layer_metadata(response)
-        if fields is None:
-            # Some self-hosted services return HTML or a malformed body on
-            # the layer metadata endpoint while the query endpoint works
-            # (seen on Columbus and Indianapolis). Derive the schema from a
-            # one-row query instead of failing.
-            logger.warning(
-                "Layer metadata at %s was not usable; deriving schema from a "
-                "1-row query",
-                layer_url,
-            )
-            fields = await self._schema_from_query(layer_url)
-        return [
-            {
-                "name": f.get("name", ""),
-                "type": f.get("type", ""),
-                "alias": f.get("alias", ""),
-            }
-            for f in fields
-        ]
+        if self._fields_from_layer_metadata(response) is None:
+            return None
+        metadata = response.json()
+        self._layer_metadata_cache[layer_url] = metadata
+        return metadata
 
     @staticmethod
     def _fields_from_layer_metadata(response: httpx.Response) -> list | None:
@@ -615,43 +896,105 @@ class ArcGISPlugin(BaseOpenDataPlugin):
         Returns:
             List of feature attribute dicts
         """
-        if limit < 1:
-            raise ValueError(f"limit must be at least 1 (got {limit})")
-
-        dataset = await self.get_dataset(dataset_id)
-        service_url = dataset.get("service_url")
-        ds_type = dataset.get("type", "")
-        if not service_url:
-            raise ValueError(
-                f"Dataset {dataset_id} does not have a queryable Feature Service URL"
-            )
-
-        if ds_type and ds_type not in self.QUERYABLE_TYPES:
-            raise ValueError(
-                f"Dataset type '{ds_type}' is not queryable. "
-                f"query_data only supports: {', '.join(sorted(self.QUERYABLE_TYPES))}."
-            )
-
-        where_clause = WhereValidator.validate(where)
-        service_url = self._validate_feature_url(
-            service_url,
-            self.plugin_config.portal_url,
-            self.plugin_config.trusted_service_hosts,
-            auto_trust=self.plugin_config.auto_trust_hub_services,
+        page = await self._query_page(
+            dataset_id, where, out_fields, limit, with_count=False
         )
-        service_url = await self._resolve_layer_url(service_url)
-        query_url = f"{service_url}/query"
+        return page["records"]
+
+    async def _query_page(
+        self,
+        dataset_id: str,
+        where: str,
+        out_fields: str,
+        limit: int,
+        *,
+        offset: int = 0,
+        order_by: str | None = None,
+        with_count: bool = True,
+        layer: int | None = None,
+    ) -> dict[str, Any]:
+        """Query one page of records, with the total match count.
+
+        Resolves the Feature Service URL (two-hop), validates ``where`` and
+        ``order_by``, and sends ``resultOffset``/``orderByFields`` when
+        given. The total comes from a ``returnCountOnly`` request on the
+        same WHERE clause; it is skipped when the page itself proves the
+        total (a first page that came back short of ``limit`` with no
+        transfer-limit flag).
+
+        Args:
+            dataset_id: Hub item ID.
+            where: SQL WHERE clause (validated via :class:`WhereValidator`).
+            out_fields: Comma-separated field names to return.
+            limit: Maximum number of records (capped at 1000).
+            offset: Matching records to skip.
+            order_by: Sort order (validated via
+                :meth:`WhereValidator.validate_order_by`).
+            with_count: Whether to look up the total match count.
+            layer: Layer or table id within the service; ``None`` uses the
+                default layer.
+
+        Returns:
+            ``{"records", "offset", "total", "exceeded"}``, where ``total`` is
+            ``None`` when unknown and ``exceeded`` mirrors the service's
+            ``exceededTransferLimit`` flag.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError(f"limit must be at least 1 (got {limit})")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError(f"offset must be a non-negative integer (got {offset})")
+        sort = WhereValidator.validate_order_by(order_by)
+        where_clause = WhereValidator.validate(where)
+
+        layer_url, dataset = await self._layer_url_for(
+            dataset_id, layer, queryable_only=True
+        )
+        query_url = f"{layer_url}/query"
         record_count = min(limit, 1000)
-        params = {
+        params: dict[str, Any] = {
             "where": where_clause,
             "outFields": out_fields,
             "resultRecordCount": record_count,
             "f": "json",
             "returnGeometry": "false",
         }
+        if offset:
+            params["resultOffset"] = offset
+        if sort:
+            params["orderByFields"] = sort
 
-        response = await self._call_feature_service(query_url, params)
+        data = self._query_json(await self._call_feature_service(query_url, params))
+        features = data.get("features") or []
+        records = [f.get("attributes", {}) for f in features]
+        exceeded = bool(data.get("exceededTransferLimit"))
 
+        total: int | None = None
+        if with_count:
+            if offset == 0 and len(records) < record_count and not exceeded:
+                total = len(records)
+            else:
+                total = await self._count_features(query_url, where_clause)
+
+        return {
+            "records": records,
+            "offset": offset,
+            "total": total,
+            "exceeded": exceeded,
+            # Only a cached layer description is used here, so the footer
+            # never costs an extra request.
+            "source": self._source(
+                dataset, layer_url, self._layer_metadata_cache.get(layer_url)
+            ),
+        }
+
+    @staticmethod
+    def _query_json(response: httpx.Response) -> dict[str, Any]:
+        """Parse a Feature Service ``/query`` response, raising on errors.
+
+        Raises:
+            ValueError: If the body is not JSON.
+            RuntimeError: If the body is an ArcGIS error envelope.
+        """
         try:
             data = response.json()
         except Exception as json_err:
@@ -662,7 +1005,7 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                 f"point to a queryable ArcGIS Feature Service."
             ) from json_err
 
-        error_in_body = data.get("error")
+        error_in_body = data.get("error") if isinstance(data, dict) else None
         if error_in_body:
             code = error_in_body.get("code", "unknown")
             msg = error_in_body.get("message", "Unknown error")
@@ -672,12 +1015,209 @@ class ArcGISPlugin(BaseOpenDataPlugin):
                 f"Feature Service query failed (code {code}): {msg}"
                 + (f" — {detail_str}" if detail_str else "")
             )
+        return data if isinstance(data, dict) else {}
 
-        features = data.get("features", [])
-        if not features:
-            return []
+    async def _count_features(self, query_url: str, where: str) -> int | None:
+        """Return how many records match ``where``, or ``None`` if unknown.
 
-        return [f.get("attributes", {}) for f in features]
+        A failed count does not fail the query; the page is still returned
+        without a total.
+        """
+        params = {"where": where, "returnCountOnly": "true", "f": "json"}
+        try:
+            response = await self._call_feature_service(query_url, params)
+            count = response.json().get("count")
+        except Exception as exc:  # noqa: BLE001 - the count is best-effort
+            logger.warning("Record count query failed for %s: %s", query_url, exc)
+            return None
+        if isinstance(count, bool) or not isinstance(count, int):
+            return None
+        return count
+
+    async def aggregate_features(
+        self,
+        dataset_id: str,
+        statistics: list[dict[str, Any]],
+        *,
+        group_by: list[str] | None = None,
+        where: str = "1=1",
+        having: str | None = None,
+        order_by: str | None = None,
+        limit: int = 1000,
+        layer: int | None = None,
+    ) -> dict[str, Any]:
+        """Run a server-side statistics query (``outStatistics``).
+
+        Every field named in ``statistics`` and ``group_by`` must exist in the
+        layer's schema (matched case-insensitively and sent with the schema's
+        spelling). ``where`` and ``having`` go through
+        :class:`WhereValidator`, ``order_by`` through
+        :meth:`WhereValidator.validate_order_by`. A ``count`` without a field
+        counts records using the layer's object-id field.
+
+        Args:
+            dataset_id: Hub item ID.
+            statistics: ``[{"type", "field", "as"}]``; ``type`` is one of
+                :data:`STATISTIC_TYPES`, ``as`` names the output column
+                (default ``<type>_<field>``).
+            group_by: Fields to group by.
+            where: WHERE clause applied before grouping.
+            having: Filter on the computed statistics.
+            order_by: Sort order over group fields or output names.
+            limit: Maximum number of groups returned.
+            layer: Layer or table id, or ``None`` for the default layer.
+
+        Returns:
+            ``{"rows", "total_groups", "layer_url", "exceeded"}``.
+
+        Raises:
+            ValueError: On invalid arguments, unknown fields, or a layer that
+                does not support statistics.
+            RuntimeError: If the service reports an error.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError(f"limit must be at least 1 (got {limit})")
+        if not isinstance(statistics, list) or not statistics:
+            raise ValueError("statistics must be a non-empty list")
+        if len(statistics) > _MAX_STATISTICS:
+            raise ValueError(f"statistics accepts at most {_MAX_STATISTICS} entries")
+        group_by = group_by or []
+        if not isinstance(group_by, list) or not all(
+            isinstance(g, str) for g in group_by
+        ):
+            raise ValueError("group_by must be a list of field names")
+        if len(group_by) > _MAX_GROUP_BY:
+            raise ValueError(f"group_by accepts at most {_MAX_GROUP_BY} fields")
+        for name in group_by:
+            self._check_field_name(name, "group_by field")
+        requested = [self._parse_statistic(stat) for stat in statistics]
+        where_clause = WhereValidator.validate(where)
+        having_clause = (
+            WhereValidator.validate(having)
+            if isinstance(having, str) and having.strip()
+            else None
+        )
+        if having is not None and not isinstance(having, str):
+            raise ValueError("having must be a string")
+        sort = WhereValidator.validate_order_by(order_by)
+
+        layer_url, dataset = await self._layer_url_for(
+            dataset_id, layer, queryable_only=True
+        )
+        fields, metadata = await self._layer_fields(layer_url)
+        capabilities = metadata.get("advancedQueryCapabilities") or {}
+        if capabilities.get("supportsStatistics") is False:
+            raise ValueError(
+                "This layer does not support server-side statistics; use "
+                "query_data and aggregate the rows instead."
+            )
+
+        by_name = {
+            str(f.get("name", "")).lower(): f for f in fields if isinstance(f, dict)
+        }
+        object_id = next(
+            (f.get("name") for f in fields if f.get("type") == "esriFieldTypeOID"),
+            None,
+        )
+
+        def schema_name(name: str, role: str) -> str:
+            field = by_name.get(name.lower())
+            if field is None:
+                raise ValueError(
+                    f"Unknown {role} {name!r}; use get_schema to list this "
+                    "layer's fields"
+                )
+            return str(field["name"])
+
+        groups = [schema_name(g, "group_by field") for g in group_by]
+        out_statistics = []
+        out_names: set[str] = {g.lower() for g in groups}
+        for stat_type, field, alias in requested:
+            if field is None:
+                if stat_type != "count":
+                    raise ValueError(f"{stat_type} needs a field")
+                if not object_id:
+                    raise ValueError(
+                        "count without a field needs an object-id field; name "
+                        "a field to count"
+                    )
+                field = object_id
+            else:
+                field = schema_name(field, "statistics field")
+            alias = alias or f"{stat_type}_{field}"
+            if alias.lower() in out_names:
+                raise ValueError(
+                    f"Output name {alias!r} is used twice; give each statistic "
+                    "a distinct 'as'"
+                )
+            out_names.add(alias.lower())
+            out_statistics.append(
+                {
+                    "statisticType": stat_type,
+                    "onStatisticField": field,
+                    "outStatisticFieldName": alias,
+                }
+            )
+
+        params: dict[str, Any] = {
+            "where": where_clause,
+            "outStatistics": json.dumps(out_statistics),
+            "returnGeometry": "false",
+            "f": "json",
+        }
+        if groups:
+            params["groupByFieldsForStatistics"] = ",".join(groups)
+        if having_clause:
+            params["havingClause"] = having_clause
+        if sort:
+            params["orderByFields"] = sort
+
+        data = self._query_json(
+            await self._call_feature_service(f"{layer_url}/query", params)
+        )
+        rows = [f.get("attributes", {}) for f in data.get("features") or []]
+        return {
+            "rows": rows[:limit],
+            "total_groups": len(rows),
+            "layer_url": layer_url,
+            "exceeded": bool(data.get("exceededTransferLimit")),
+            "source": self._source(dataset, layer_url, metadata),
+        }
+
+    @staticmethod
+    def _check_field_name(name: Any, role: str) -> str:
+        """Require a plain field name or output alias."""
+        if not isinstance(name, str) or not _FIELD_NAME.match(name):
+            raise ValueError(
+                f"Invalid {role} {str(name)[:80]!r}: use a plain field name "
+                "(letters, digits, underscores)"
+            )
+        return name
+
+    def _parse_statistic(self, stat: Any) -> tuple[str, str | None, str | None]:
+        """Validate one ``statistics`` entry; return ``(type, field, as)``."""
+        if not isinstance(stat, dict):
+            raise ValueError(
+                'Each statistic must be an object like {"type": "sum", '
+                '"field": "UNITS"}'
+            )
+        stat_type = str(stat.get("type", "")).lower()
+        if stat_type not in STATISTIC_TYPES:
+            raise ValueError(
+                f"Unknown statistic type {str(stat.get('type'))[:40]!r}; use one "
+                f"of {', '.join(STATISTIC_TYPES)}"
+            )
+        field = stat.get("field")
+        if field in (None, "", "*"):
+            field = None
+        else:
+            self._check_field_name(field, "statistics field")
+        alias = stat.get("as")
+        if alias in (None, ""):
+            alias = None
+        else:
+            self._check_field_name(alias, "statistic name")
+        return stat_type, field, alias
 
     # ── Aggregations (standalone helper, not a DataPlugin method) ───────
 
@@ -847,47 +1387,188 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             return "path is not an ArcGIS REST FeatureServer/MapServer path"
         return None
 
-    async def _resolve_layer_url(self, service_url: str) -> str:
+    async def _resolve_layer_url(
+        self, service_url: str, layer: int | None = None
+    ) -> str:
         """Return the layer URL to query for a service URL.
 
-        A URL that already names a layer (``.../FeatureServer/4``) is
-        returned as is. For a service root, the service description
-        (``?f=json``) is read and the first layer's id is used, falling back
-        to the first table, then to ``0``. Services whose only layer is not
-        id 0 (HUD's "Low to Moderate Income Population by Tract" is layer 4,
-        "Opportunity Zones" is layer 13) were unreachable when ``/0`` was
-        assumed. Results are cached per service URL.
+        With ``layer``, the service's layers and tables are read and the id
+        must be one of them (any layer index already in ``service_url`` is
+        replaced). Without it, a URL that already names a layer
+        (``.../FeatureServer/4``) is returned as is; for a service root the
+        first layer is used, falling back to the first table, then to ``0``.
+        Services whose only layer is not id 0 (HUD's "Low to Moderate
+        Income Population by Tract" is layer 4, "Opportunity Zones" is
+        layer 13) were unreachable when ``/0`` was assumed. Default
+        resolutions are cached per service URL.
 
         Args:
             service_url: Validated Feature Service or layer URL.
+            layer: Explicit layer or table id, or ``None`` for the default.
 
         Returns:
             A layer URL (``.../FeatureServer/<id>``).
+
+        Raises:
+            ValueError: If ``layer`` is not a non-negative integer, the URL is
+                not a FeatureServer/MapServer URL, or the service does not
+                list that id.
         """
         stripped = service_url.rstrip("/")
-        if not re.search(r"/(FeatureServer|MapServer)$", stripped, re.IGNORECASE):
+        match = _SERVICE_ROOT.match(stripped)
+
+        if layer is not None:
+            if isinstance(layer, bool) or not isinstance(layer, int) or layer < 0:
+                raise ValueError(
+                    f"layer must be a non-negative integer (got {layer!r})"
+                )
+            if not match:
+                raise ValueError(
+                    "layer can only be used with a FeatureServer or MapServer "
+                    "service URL"
+                )
+            root = match.group("root")
+            listed = await self._service_layers(root)
+            # An unreadable layer list is not proof the id is wrong; let the
+            # service answer for it.
+            if listed and layer not in {entry["id"] for entry in listed}:
+                raise ValueError(
+                    f"layer {layer} is not in this service. Available: "
+                    + "; ".join(self._describe_layer(entry) for entry in listed)
+                )
+            return f"{root}/{layer}"
+
+        if not match or match.group("layer") is not None:
             return stripped
 
         cached = self._layer_url_cache.get(stripped)
         if cached is not None:
             return cached
 
-        layer_id = 0
-        try:
-            response = await self._call_feature_service(stripped, {"f": "json"})
-            data = response.json() or {}
-            candidates = list(data.get("layers") or []) + list(data.get("tables") or [])
-            first = next((c for c in candidates if isinstance(c.get("id"), int)), None)
-            if first is not None:
-                layer_id = int(first["id"])
-        except Exception as exc:  # noqa: BLE001 - metadata unreachable: keep default
-            logger.warning(
-                "Could not read layer list for %s (%s); assuming layer 0", stripped, exc
-            )
-
+        listed = await self._service_layers(stripped)
+        # Layers are listed before tables, so the first entry is the first
+        # layer, or the first table when there are no layers.
+        layer_id = listed[0]["id"] if listed else 0
         resolved = f"{stripped}/{layer_id}"
         self._layer_url_cache[stripped] = resolved
         return resolved
+
+    async def _service_layers(self, service_root: str) -> list[dict[str, Any]]:
+        """List a service's layers, then tables, from ``{root}?f=json``.
+
+        Each entry is ``{"id", "name", "kind", "geometry"}`` where ``kind`` is
+        ``"layer"`` or ``"table"``. Returns ``[]`` (and logs a warning) when
+        the service description cannot be read; successful reads are cached.
+
+        Args:
+            service_root: Validated ``.../FeatureServer`` or ``.../MapServer`` URL.
+        """
+        cached = self._service_layers_cache.get(service_root)
+        if cached is not None:
+            return cached
+        try:
+            response = await self._call_feature_service(service_root, {"f": "json"})
+            data = response.json() or {}
+        except Exception as exc:  # noqa: BLE001 - metadata unreachable: no list
+            logger.warning(
+                "Could not read layer list for %s (%s); assuming layer 0",
+                service_root,
+                exc,
+            )
+            return []
+
+        entries: list[dict[str, Any]] = []
+        for kind, key in (("layer", "layers"), ("table", "tables")):
+            for item in data.get(key) or []:
+                if not isinstance(item, dict):
+                    continue
+                layer_id = item.get("id")
+                if isinstance(layer_id, bool) or not isinstance(layer_id, int):
+                    continue
+                entries.append(
+                    {
+                        "id": layer_id,
+                        "name": item.get("name", ""),
+                        "kind": kind,
+                        "geometry": item.get("geometryType", ""),
+                    }
+                )
+        self._service_layers_cache[service_root] = entries
+        return entries
+
+    async def _add_service_details(self, dataset: dict[str, Any]) -> None:
+        """Add ``layers`` and the default layer's edit dates, for ``get_dataset``.
+
+        Sets ``dataset["layers"]`` (see :meth:`_dataset_layers`) and, when the
+        default layer's description can be read, ``dataLastEditDate`` and
+        ``schemaLastEditDate`` from its ``editingInfo``. Every lookup is
+        best-effort: ``get_dataset`` never fails because of them.
+        """
+        dataset["layers"] = await self._dataset_layers(dataset)
+        default = next((e for e in dataset["layers"] if e.get("default")), None)
+        if default is None:
+            return
+        layer_url = f"{default['root']}/{default['id']}"
+        try:
+            metadata = await self._layer_metadata(layer_url)
+        except Exception as exc:  # noqa: BLE001 - dates are optional
+            logger.warning("Could not read layer metadata for %s: %s", layer_url, exc)
+            return
+        editing = (metadata or {}).get("editingInfo") or {}
+        dataset["dataLastEditDate"] = self.short_date(
+            editing.get("dataLastEditDate") or editing.get("lastEditDate")
+        )
+        dataset["schemaLastEditDate"] = self.short_date(
+            editing.get("schemaLastEditDate")
+        )
+
+    async def _dataset_layers(self, dataset: dict[str, Any]) -> list[dict[str, Any]]:
+        """Layers and tables of a dataset's service, for ``get_dataset``.
+
+        Marks the entry that queries use by default with ``"default": True``
+        and records the service root in ``"root"``. Returns ``[]`` when the
+        dataset has no service URL, the host is not trusted, or the service
+        description cannot be read; ``get_dataset`` still succeeds.
+        """
+        service_url = dataset.get("service_url")
+        if not service_url:
+            return []
+        try:
+            service_url = self._validate_feature_url(
+                service_url,
+                self.plugin_config.portal_url,
+                self.plugin_config.trusted_service_hosts,
+                auto_trust=self.plugin_config.auto_trust_hub_services,
+            )
+        except ValueError:
+            return []
+        match = _SERVICE_ROOT.match(service_url.rstrip("/"))
+        if not match:
+            return []
+        listed = await self._service_layers(match.group("root"))
+        if not listed:
+            return []
+        default_id = (
+            int(match.group("layer"))
+            if match.group("layer") is not None
+            else listed[0]["id"]
+        )
+        root = match.group("root")
+        return [
+            {**entry, "default": entry["id"] == default_id, "root": root}
+            for entry in listed
+        ]
+
+    def _describe_layer(self, entry: dict[str, Any]) -> str:
+        """Render one layer/table entry as ``1: SAFMR_table (table)``."""
+        name = self.portal_line(entry.get("name"), default="unnamed")
+        if entry.get("kind") == "table":
+            kind = "table"
+        else:
+            geometry = str(entry.get("geometry") or "")
+            shape = geometry.removeprefix("esriGeometry").lower()
+            kind = f"{self.portal_line(shape)} layer" if shape else "layer"
+        return f"{entry.get('id')}: {name} ({kind})"
 
     @staticmethod
     def _ensure_layer_url(service_url: str) -> str:
@@ -908,9 +1589,13 @@ class ArcGISPlugin(BaseOpenDataPlugin):
 
     @staticmethod
     def _extract_dataset_summary(props: dict[str, Any]) -> dict[str, Any]:
-        description = props.get("description", "") or ""
-        if len(description) > 300:
-            description = description[:300] + "..."
+        """Summarize a Hub item; the description is converted to plain text.
+
+        The description is kept whole: search results show a 300-character
+        excerpt and ``get_dataset`` the full text (up to
+        :data:`DESCRIPTION_MAX`), both applied at display time.
+        """
+        description = html_to_text(props.get("description"))
 
         return {
             "id": props.get("id", ""),
@@ -1002,6 +1687,8 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             ("Created", "created"),
             ("Modified", "modified"),
             ("Last edit", "lastEditDate"),
+            ("Data last edited", "dataLastEditDate"),
+            ("Schema last edited", "schemaLastEditDate"),
         ):
             value = self.short_date(dataset.get(key))
             if value:
@@ -1019,12 +1706,18 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             facts.append(f"Size: {size}")
         if facts:
             lines.append(" | ".join(facts))
-        add("License", self.portal_block(dataset.get("licenseInfo"), max_len=1000))
-        add("Access information", line(dataset.get("accessInformation")))
-        add("Snippet", line(dataset.get("snippet")))
-        lines.append(
-            f"Description: {self.portal_block(dataset.get('description'), default='No description')}"
+        add("License", self.portal_block(dataset.get("licenseInfo"), max_len=2000))
+        add(
+            "Access information",
+            self.portal_block(dataset.get("accessInformation"), max_len=2000),
         )
+        add("Snippet", line(dataset.get("snippet")))
+        description = self.portal_block(
+            dataset.get("description"),
+            max_len=DESCRIPTION_MAX,
+            default="No description",
+        )
+        lines.append(f"Description: {description}")
         add("Spatial Reference", line(dataset.get("spatialReference")))
         add("Geometry Type", line(dataset.get("geometryType")))
         add("Tags", join_cleaned(dataset.get("tags") or []))
@@ -1038,6 +1731,14 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             add("Additional Resources", line(additional, max_len=1000))
         add("URL", self._display_url(dataset.get("url")))
         add("Service URL", self._display_url(dataset.get("service_url")))
+        layers = dataset.get("layers") or []
+        if layers:
+            lines.append(
+                "Layers and tables (pass the id as layer to get_schema or query_data):"
+            )
+            for entry in layers:
+                marker = " [default]" if entry.get("default") else ""
+                lines.append(f"  {self._describe_layer(entry)}{marker}")
         return "\n".join(lines)
 
     def _display_url(self, url: Any) -> str:
@@ -1062,22 +1763,152 @@ class ArcGISPlugin(BaseOpenDataPlugin):
             name = self.portal_line(field.get("name"), default="unknown")
             ftype = self.portal_line(field.get("type"), default="unknown")
             alias = self.portal_line(field.get("alias"))
-            lines.append(f"  • {name} ({ftype})")
+            length = field.get("length")
+            detail = f"{ftype}, length {length}" if isinstance(length, int) else ftype
+            lines.append(f"  • {name} ({detail})")
             if alias and alias != name:
                 lines.append(f"    Alias: {alias}")
+            domain = self._describe_domain(field.get("domain"))
+            if domain:
+                lines.append(f"    {domain}")
 
         return "\n".join(lines)
 
-    def _format_query_results(self, records: list[dict[str, Any]], limit: int) -> str:
+    def _describe_domain(self, domain: Any) -> str:
+        """Render a coded-value or range domain as one line (or ``""``)."""
+        if not isinstance(domain, dict):
+            return ""
+        if domain.get("type") == "range":
+            low, high = (list(domain.get("range") or []) + [None, None])[:2]
+            if low is None and high is None:
+                return ""
+            return f"Range: {self.portal_line(low)} to {self.portal_line(high)}"
+        values = domain.get("codedValues")
+        if not isinstance(values, list) or not values:
+            return ""
+        shown = []
+        for item in values[:_MAX_DOMAIN_VALUES]:
+            if not isinstance(item, dict):
+                continue
+            code = self.portal_line(item.get("code"), max_len=60)
+            label = self.portal_line(item.get("name"), max_len=100)
+            shown.append(f"{code} = {label}" if label and label != code else code)
+        text = "Values: " + "; ".join(shown)
+        if len(values) > _MAX_DOMAIN_VALUES:
+            text += f"; … and {len(values) - _MAX_DOMAIN_VALUES} more"
+        return text
+
+    def _source(
+        self,
+        dataset: dict[str, Any],
+        layer_url: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, str]:
+        """Collect the citation facts for a query result's source block."""
+        item_id = self.safe_id(dataset.get("id"))
+        editing = (metadata or {}).get("editingInfo") or {}
+        return {
+            "title": self.portal_line(dataset.get("title")),
+            "item_url": (
+                f"{self.plugin_config.portal_url.rstrip('/')}/datasets/{item_id}"
+                if dataset.get("id") and item_id == dataset.get("id")
+                else ""
+            ),
+            # Validated by _validate_feature_url before it was queried.
+            "layer_url": self.portal_line(layer_url, max_len=500),
+            "data_edited": self.short_date(
+                editing.get("dataLastEditDate") or editing.get("lastEditDate")
+            ),
+            "license": self.portal_line(dataset.get("licenseInfo"), max_len=200),
+            "retrieved": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+        }
+
+    @staticmethod
+    def _format_source(source: dict[str, str] | None) -> str:
+        """Render the source block appended to query and aggregate results."""
+        if not source:
+            return ""
+        lines = ["Source:"]
+        title = source.get("title")
+        item_url = source.get("item_url")
+        if title or item_url:
+            lines.append(
+                "  Dataset: "
+                + (f"{title} ({item_url})" if title and item_url else title or item_url)
+            )
+        for label, key in (
+            ("Layer queried", "layer_url"),
+            ("Data last edited", "data_edited"),
+            ("License", "license"),
+            ("Retrieved", "retrieved"),
+        ):
+            if source.get(key):
+                lines.append(f"  {label}: {source[key]}")
+        return "\n".join(lines)
+
+    def _format_query_results(
+        self, page: dict[str, Any], limit: int, *, fmt: str = "text"
+    ) -> str:
+        """Format a :meth:`_query_page` result with totals and paging hints.
+
+        Args:
+            page: ``{"records", "offset", "total", "exceeded"}``.
+            limit: The requested ``limit``.
+            fmt: Output format, one of :data:`ROW_FORMATS`.
+        """
+        records = page.get("records") or []
+        offset = page.get("offset", 0)
+        total = page.get("total")
         if not records:
+            if total:
+                return (
+                    f"No records returned at offset {offset}; "
+                    f"{total} record(s) match in total."
+                )
             return "No records returned."
 
+        window = f"(offset: {offset}, limit: {limit})"
+        if total is not None:
+            header = f"Returned {len(records)} of {total} matching record(s) {window}:"
+        else:
+            header = f"Returned {len(records)} record(s) {window}:"
+
         # ArcGIS records have no internal _id key to skip.
-        return self.format_records(
-            records,
-            header=f"Returned {len(records)} record(s) (limit: {limit}):",
-            skip_keys=frozenset(),
+        text, shown = self.render_rows(
+            records, fmt, header=header, skip_keys=frozenset()
         )
+        next_offset = offset + shown
+        if total is not None:
+            more = next_offset < total
+        else:
+            more = shown < len(records) or bool(page.get("exceeded"))
+        if more:
+            text += (
+                f"\n\nMore records match. Next page: offset={next_offset} "
+                "with the same where, out_fields and order_by."
+            )
+        source = self._format_source(page.get("source"))
+        return f"{text}\n\n{source}" if source else text
+
+    def _format_aggregate(self, result: dict[str, Any], *, fmt: str = "text") -> str:
+        """Format an :meth:`aggregate_features` result."""
+        rows = result.get("rows") or []
+        if not rows:
+            return "No groups matched."
+        total = result.get("total_groups", len(rows))
+        header = (
+            f"Aggregated {total} group(s):"
+            if total == len(rows)
+            else f"Aggregated {total} group(s); showing the first {len(rows)} (limit):"
+        )
+        text, _ = self.render_rows(rows, fmt, header=header, skip_keys=frozenset())
+        if result.get("exceeded"):
+            text += (
+                "\n\nThe service hit its transfer limit, so some groups are "
+                "missing. Narrow where or group by fewer fields."
+            )
+        source = self._format_source(result.get("source"))
+        return f"{text}\n\n{source}" if source else text
 
     def _format_aggregations(self, field: str, buckets: list[dict[str, Any]]) -> str:
         if not buckets:

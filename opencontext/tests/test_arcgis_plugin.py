@@ -38,6 +38,16 @@ def _mock_response(json_data, status_code=200, text=None, content_type=None):
     return mock
 
 
+def _page(records, *, offset=0, total=None, exceeded=False):
+    """Build a ``_query_page`` result; ``total`` defaults to the row count."""
+    return {
+        "records": records,
+        "offset": offset,
+        "total": len(records) if total is None else total,
+        "exceeded": exceeded,
+    }
+
+
 # ── Plugin attributes ──────────────────────────────────────────────────
 
 
@@ -149,17 +159,21 @@ class TestInitialization:
 
 
 class TestGetTools:
-    def test_get_tools_returns_five_tools(self, arcgis_config):
+    def test_get_tools_returns_six_tools(self, arcgis_config):
         plugin = ArcGISPlugin(arcgis_config)
         tools = plugin.get_tools()
 
-        assert len(tools) == 5
+        assert len(tools) == 6
         tool_names = [t.name for t in tools]
         assert "search_datasets" in tool_names
         assert "get_dataset" in tool_names
         assert "get_aggregations" in tool_names
         assert "get_schema" in tool_names
         assert "query_data" in tool_names
+        # New in upstream #37: server-side outStatistics/groupBy aggregation,
+        # replacing client-side pull-and-sum (23 paged calls for a five-county
+        # sum, discovered on HUD's Small Area FMRs).
+        assert "aggregate_data" in tool_names
 
     def test_get_tools_uses_city_name_directly(self, arcgis_config):
         plugin = ArcGISPlugin(arcgis_config)
@@ -276,13 +290,15 @@ class TestExecuteTool:
 
     @pytest.mark.asyncio
     async def test_execute_tool_query_data_passes_where_out_fields(self, arcgis_config):
+        # Upstream #35: query_data now goes through _query_page (paging,
+        # order_by, total count) instead of the old _query_features.
         plugin = ArcGISPlugin(arcgis_config)
 
         with patch.object(
             plugin,
-            "_query_features",
+            "_query_page",
             new_callable=AsyncMock,
-            return_value=[{"name": "Park A", "status": "Open"}],
+            return_value=_page([{"name": "Park A", "status": "Open"}]),
         ) as mock_qf:
             result = await plugin.execute_tool(
                 "query_data",
@@ -296,7 +312,15 @@ class TestExecuteTool:
 
         assert result.success is True
         assert len(result.content) > 0
-        mock_qf.assert_called_once_with("abc123", "status = 'Open'", "name,status", 50)
+        mock_qf.assert_called_once_with(
+            "abc123",
+            "status = 'Open'",
+            "name,status",
+            50,
+            offset=0,
+            order_by=None,
+            layer=None,
+        )
 
     @pytest.mark.asyncio
     async def test_execute_tool_query_data_defaults(self, arcgis_config):
@@ -304,14 +328,43 @@ class TestExecuteTool:
 
         with patch.object(
             plugin,
-            "_query_features",
+            "_query_page",
             new_callable=AsyncMock,
-            return_value=[{"name": "Park A"}],
+            return_value=_page([{"name": "Park A"}]),
         ) as mock_qf:
             result = await plugin.execute_tool("query_data", {"dataset_id": "abc123"})
 
         assert result.success is True
-        mock_qf.assert_called_once_with("abc123", "1=1", "*", 100)
+        mock_qf.assert_called_once_with(
+            "abc123", "1=1", "*", 100, offset=0, order_by=None, layer=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_query_data_renders_every_returned_record(
+        self, arcgis_config
+    ):
+        """Issue #28: 39 rows under limit 50 must all render, not the first 10
+        (the bug found on HUD's Small Area FMRs that motivated this sync)."""
+        plugin = ArcGISPlugin(arcgis_config)
+        rows = [{"PROJECT": f"P{i}", "LI_UNITS": i} for i in range(39)]
+
+        with patch.object(
+            plugin, "_query_page", new_callable=AsyncMock, return_value=_page(rows)
+        ):
+            result = await plugin.execute_tool(
+                "query_data",
+                {
+                    "dataset_id": "810ccb34dd464ec4ad4697d35fff21a5",
+                    "where": "COUNTY_LEVEL='18141'",
+                    "out_fields": "PROJECT,LI_UNITS",
+                    "limit": 50,
+                },
+            )
+
+        text = result.content[0]["text"]
+        assert result.success is True
+        assert "Returned 39 of 39 matching record(s) (offset: 0, limit: 50):" in text
+        assert "Record 39:" in text
 
     @pytest.mark.asyncio
     async def test_execute_tool_get_aggregations(self, arcgis_config):
@@ -1160,15 +1213,19 @@ class TestCodeReviewFixes:
         result = await plugin.execute_tool("search_datasets", {"q": "crime"})
         assert result.success is False
 
-    def test_format_query_results_caps_display(self):
+    def test_format_query_results_shows_every_record(self):
         from plugins.arcgis.plugin import ArcGISPlugin
 
+        # Upstream #33: format_records defaulted to showing only the first 10
+        # rows despite fetching `limit`, so clients re-paged for rows they
+        # already had. _format_query_results now takes the _query_page()
+        # result dict ({"records", "offset", "total"}) and renders all of
+        # them within the response's character budget.
         plugin = ArcGISPlugin(self._config())
-        records = [{"a": i} for i in range(50)]
-        text = plugin._format_query_results(records, limit=1000)
-        assert "Record 10:" in text
-        assert "Record 11:" not in text
-        assert "... and 40 more record(s)" in text
+        page = {"records": [{"a": i} for i in range(50)], "offset": 0, "total": 50}
+        text = plugin._format_query_results(page, limit=1000)
+        assert "Record 50:" in text
+        assert "more record" not in text
 
 
 class TestMetadataEnrichment:

@@ -905,11 +905,14 @@ class TestFormatMethods:
         assert "No records found" in result
 
     def test_format_sql_results_with_many_records(self, plugin):
+        # Upstream #33: this hard-coded a display cap of 10 despite fetching
+        # `limit` rows; now every returned record renders.
         records = [{"id": i, "name": f"Row {i}"} for i in range(15)]
         fields = [{"id": "id"}, {"id": "name"}]
         result = plugin._format_sql_results(records, fields)
         assert "SQL Query Results" in result
-        assert "5 more" in result
+        assert "Record 15:" in result
+        assert "more record" not in result
 
     def test_format_categories_empty(self, plugin):
         result = plugin._format_categories([])
