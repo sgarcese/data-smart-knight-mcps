@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 
-from cloudwatch import fetch_log_messages, get_lambda_metrics
+from cloudwatch import fetch_log_messages_for_groups, get_lambda_metrics
 from log_analysis import (
     DURATION_FILTER,
     ERRORS_FILTER,
@@ -45,8 +45,8 @@ def _metrics(function_names: tuple[str, ...], start: datetime, end: datetime):
 
 
 @st.cache_data(ttl=300)
-def _log_messages(log_group: str, start: datetime, end: datetime, filter_pattern: str, limit: int):
-    return fetch_log_messages(log_group, start, end, filter_pattern=filter_pattern, limit=limit)
+def _log_messages(log_groups: tuple[str, ...], start: datetime, end: datetime, filter_pattern: str, limit: int):
+    return fetch_log_messages_for_groups(list(log_groups), start, end, filter_pattern=filter_pattern, limit=limit)
 
 
 st.title("Responsive Cities MCP — Portal Usage")
@@ -56,7 +56,9 @@ with st.sidebar:
     range_label = st.selectbox("Time range", list(TIME_RANGES.keys()), index=1)
     st.caption("Reads CloudWatch directly with your local AWS credentials. Nothing is written or deployed.")
 
-end = datetime.now(timezone.utc)
+# Truncate to the minute so reruns within a minute (e.g. sidebar changes) hit
+# the st.cache_data entries instead of re-querying CloudWatch.
+end = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 start = end - TIME_RANGES[range_label]
 
 portals = _discover(env)
@@ -109,8 +111,9 @@ st.header("Tool / method usage")
 
 tool_rows = []
 with st.spinner("Querying CloudWatch Logs Insights for tool usage…"):
+    by_group = _log_messages(tuple(p.log_group for p in selected), start, end, TOOL_USAGE_FILTER, 1000)
     for p in selected:
-        messages = _log_messages(p.log_group, start, end, TOOL_USAGE_FILTER, 1000)
+        messages = by_group[p.log_group]
         for label, count in tool_usage_breakdown(messages).items():
             tool_rows.append({"Portal": p.city, "Method": label, "Calls": count})
 
@@ -128,8 +131,9 @@ st.header("Recent errors")
 
 error_rows = []
 with st.spinner("Querying CloudWatch Logs Insights for errors…"):
+    by_group = _log_messages(tuple(p.log_group for p in selected), start, end, ERRORS_FILTER, 500)
     for p in selected:
-        messages = _log_messages(p.log_group, start, end, ERRORS_FILTER, 500)
+        messages = by_group[p.log_group]
         for row in recent_errors(messages, limit=20):
             error_rows.append({"Portal": p.city, **row})
 
@@ -146,8 +150,9 @@ st.header("Slowest requests")
 
 slow_rows = []
 with st.spinner("Querying CloudWatch Logs Insights for request durations…"):
+    by_group = _log_messages(tuple(p.log_group for p in selected), start, end, DURATION_FILTER, 2000)
     for p in selected:
-        messages = _log_messages(p.log_group, start, end, DURATION_FILTER, 2000)
+        messages = by_group[p.log_group]
         for row in slowest_requests(messages, limit=10):
             slow_rows.append({"Portal": p.city, **row})
 

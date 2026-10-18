@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import boto3
@@ -98,6 +99,7 @@ def fetch_log_messages(
     filter_pattern: str | None = None,
     limit: int = 1000,
     timeout_s: float = 30.0,
+    client=None,
 ) -> list[str]:
     """Run a CloudWatch Logs Insights query and return raw ``@message`` values.
 
@@ -105,8 +107,11 @@ def fetch_log_messages(
     (e.g. a portal that has never received traffic) or the query times out.
     Aggregation/parsing of the JSON log lines happens in ``log_analysis.py`` so
     this stays a thin, easily-swappable AWS access layer.
+
+    Pass a shared ``client`` when calling from several threads: boto3 clients
+    are thread-safe, but creating them from the default session is not.
     """
-    client = boto3.client("logs")
+    client = client or boto3.client("logs")
     query = "fields @timestamp, @message"
     if filter_pattern:
         query += f" | filter {filter_pattern}"
@@ -137,3 +142,28 @@ def fetch_log_messages(
         if "@message" in row:
             messages.append(row["@message"])
     return messages
+
+
+def fetch_log_messages_for_groups(
+    log_groups: list[str],
+    start: datetime,
+    end: datetime,
+    filter_pattern: str | None = None,
+    limit: int = 1000,
+    max_workers: int = 10,
+) -> dict[str, list[str]]:
+    """Run :func:`fetch_log_messages` for several log groups concurrently.
+
+    One Insights query per log group keeps each portal's ``limit`` independent.
+    ``max_workers`` stays well under the account's concurrent Logs Insights
+    query quota.
+    """
+    client = boto3.client("logs")
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = pool.map(
+            lambda group: fetch_log_messages(
+                group, start, end, filter_pattern=filter_pattern, limit=limit, client=client
+            ),
+            log_groups,
+        )
+        return dict(zip(log_groups, results))
