@@ -3,10 +3,18 @@ portals:
     url: https://data.austintexas.gov
     type: socrata
     notes: "Socrata portal supported by OpenContext."
+  - city: Bogota, Colombia
+    url: https://datosabiertos.bogota.gov.co
+    type: ckan
+    notes: "Bogotá Open Data CKAN portal supported by OpenContext."
   - city: Boulder, CO
     url: https://open-data.bouldercolorado.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Cali, Colombia
+    url: https://datos.cali.gov.co
+    type: ckan
+    notes: "Cali Open Data CKAN portal supported by OpenContext."
   - city: California
     url: https://data.ca.gov
     type: ckan
