@@ -1,6 +1,8 @@
 """Tests for the portal wrapper validation and Terraform orchestration."""
 
+import json
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -108,9 +110,117 @@ def test_build_command_custom_domain(tmp_path):
     assert "-auto-approve" in cmd
 
 
+def test_build_command_var_file_precedes_and_is_overridden_by_environment(tmp_path):
+    """-var-file must come first so the explicit -e/--environment value (which
+    the run() safety guard already checked) always wins for
+    deployment_environment, even if the var file sets it too."""
+    orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
+    var_file = tmp_path / "rc-prod.tfvars"
+    cmd = orch.build_command("plan", environment="prod", var_files=[var_file])
+
+    assert cmd == [
+        "terraform",
+        "plan",
+        f"-var-file={var_file}",
+        "-var",
+        f"portal_definitions_file={orch.definitions_file}",
+        "-var",
+        "deployment_environment=prod",
+    ]
+
+
 def test_build_command_no_auto_approve_for_plan(tmp_path):
     orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
     assert "-auto-approve" not in orch.build_command("plan", auto_approve=True)
+
+
+def _fake_show_json(environment_tag):
+    """Build a fake `terraform show -json` payload with one tagged resource."""
+    return json.dumps(
+        {
+            "values": {
+                "root_module": {
+                    "resources": [
+                        {
+                            "address": 'aws_lambda_function.mcp_server["boulder-co"]',
+                            "values": {"tags_all": {"Environment": environment_tag}},
+                        }
+                    ]
+                }
+            }
+        }
+    )
+
+
+def _patch_subprocess(monkeypatch, *, show_stdout, show_returncode=0):
+    """Stub subprocess.run: `terraform show -json` returns show_stdout, every
+    other command (the real terraform action) is recorded and returns rc=0.
+    """
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["terraform", "show", "-json"]:
+            if show_returncode != 0:
+                raise subprocess.CalledProcessError(show_returncode, cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout=show_stdout, stderr="")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def test_run_refuses_on_environment_mismatch(tmp_path, monkeypatch):
+    orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
+    calls = _patch_subprocess(monkeypatch, show_stdout=_fake_show_json("prod"))
+
+    rc = orch.run("plan", environment="staging")
+
+    assert rc == 1
+    # Only the `terraform show -json` probe ran; the real plan was never invoked.
+    assert calls == [["terraform", "show", "-json"]]
+
+
+def test_run_proceeds_on_environment_match(tmp_path, monkeypatch):
+    orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
+    calls = _patch_subprocess(monkeypatch, show_stdout=_fake_show_json("prod"))
+
+    rc = orch.run("plan", environment="prod")
+
+    assert rc == 0
+    assert calls[0] == ["terraform", "show", "-json"]
+    assert calls[1][:2] == ["terraform", "plan"]
+
+
+def test_run_proceeds_when_state_is_empty(tmp_path, monkeypatch):
+    orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
+    calls = _patch_subprocess(monkeypatch, show_stdout="")
+
+    rc = orch.run("plan", environment="staging")
+
+    assert rc == 0
+    assert calls[1][:2] == ["terraform", "plan"]
+
+
+def test_run_proceeds_when_not_yet_initialized(tmp_path, monkeypatch):
+    orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
+    _patch_subprocess(monkeypatch, show_stdout="", show_returncode=1)
+
+    rc = orch.run("plan", environment="staging")
+
+    assert rc == 0
+
+
+def test_run_skip_environment_check_bypasses_guard(tmp_path, monkeypatch):
+    orch = TerraformOrchestrator(definitions_file=_write_defs(tmp_path, []))
+    calls = _patch_subprocess(monkeypatch, show_stdout=_fake_show_json("prod"))
+
+    rc = orch.run("plan", environment="staging", skip_environment_check=True)
+
+    assert rc == 0
+    # The `terraform show -json` probe never ran; only the real plan did.
+    assert len(calls) == 1
+    assert calls[0][:2] == ["terraform", "plan"]
 
 
 def test_parse_app_tokens():

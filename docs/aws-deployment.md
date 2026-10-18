@@ -11,8 +11,12 @@ CloudWatch log group per portal) but **without custom DNS** — you use the API
 Gateway invoke URLs. Resources are named `<slug>-mcp-staging`, so dev/staging/prod
 can coexist in one account.
 
-The current portals are all ArcGIS Hub or CKAN, which need **no secrets**. A
-token is only required if you add a **Socrata** portal — see §4.
+ArcGIS Hub, CKAN, and Opendatasoft portals need **no secrets**. Every
+**Socrata** portal needs an app token — see §4.
+
+> **Deploying the Responsive Cities (`<slug>.responsive.city`) portals?** Skip
+> to §10 and read §11 first — that deployment has its own role, tfvars, and
+> state backend.
 
 ---
 
@@ -87,12 +91,12 @@ encrypt = true
 > S3-native locking but requires Terraform ≥ 1.11 and is rejected by some builds;
 > a single operator can safely skip it, or use a `dynamodb_table` instead.
 
-## 4. Socrata app token (only if you add a Socrata portal)
+## 4. Socrata app tokens
 
-**None of the current portals are Socrata, so you can skip this section.** It
-applies only when a portal in `portal_definitions.yaml` has `type: socrata` —
-then that portal needs a free token or `terraform plan` fails a precondition
-(*"Socrata portal '<slug>' requires an app token"*).
+Every portal with `type: socrata` needs a free app token, or `terraform plan`
+fails a precondition (*"Socrata portal '<slug>' requires an app token"*). It
+must be an **App Token**, not an API Key ID — see
+[portals.md](portals.md#socrata-credentials-app-token-not-api-key).
 
 Register at <https://dev.socrata.com/register>, then supply it at deploy time
 (keyed by the portal slug, never committed):
@@ -117,20 +121,13 @@ terraform init -backend-config=backend.s3.hcl
 # c. If your CLI uses a custom login (see §2), export creds for Terraform:
 eval "$(aws configure export-credentials --format env)"
 
-# d. Plan + apply staging (no -var needed; all current portals are token-free)
-terraform plan  -var=deployment_environment=staging -out=staging.tfplan
-terraform apply staging.tfplan
+# d. Plan + apply staging through the wrapper CLI (Socrata tokens from §4)
+python ../portal_manager.py plan  -e staging
+python ../portal_manager.py apply -e staging
 ```
 
-Or drive it through the wrapper CLI:
-
-```bash
-# run `terraform init -backend-config=backend.s3.hcl` once first
-python portal_manager.py apply -e staging
-```
-
-(If a Socrata portal is present, add `-var='portal_app_tokens={"<slug>":"…"}'` to
-plan/apply, or `--app-token <slug>=…` to the CLI — see §4.)
+The CLI runs the environment-safety check in §11 before touching Terraform;
+prefer it over bare `terraform plan`/`apply`.
 
 `terraform apply` runs `build_lambda.sh` automatically (builds the ~22 MB package
 with dependencies), then creates per portal: an IAM role, a Lambda, an HTTP API
@@ -218,9 +215,88 @@ captured in the checked-in `rc-prod.tfvars` / `rc-staging.tfvars`:
 ```bash
 cd portal-wrapper/terraform
 AWS_PROFILE=rc-deploy terraform init -backend-config=backend.s3.hcl
-AWS_PROFILE=rc-deploy terraform plan  -var-file=rc-prod.tfvars
-AWS_PROFILE=rc-deploy terraform apply -var-file=rc-prod.tfvars
+AWS_PROFILE=rc-deploy python3 ../portal_manager.py plan  -e prod --var-file=rc-prod.tfvars
+AWS_PROFILE=rc-deploy python3 ../portal_manager.py apply -e prod --var-file=rc-prod.tfvars
 ```
+
+`--var-file` passes the tfvars straight through to Terraform while routing
+through the environment-safety check in §11. Read §11 before ever running
+`-e staging` against this backend.
+
+Socrata tokens come from the gitignored `secret.auto.tfvars` in this
+directory, which Terraform loads automatically.
+
+A routine code-only redeploy (e.g. after syncing OpenContext — see the
+[root README](../README.md#updating-opencontext)) should plan as
+`N to change` (one in-place update per portal Lambda, only
+`source_code_hash` differing) plus `1 to add, 1 to destroy` for the
+`null_resource.build_lambda` rebuild trigger. Anything else means stop and
+read the plan.
+
+---
+
+## 11. Environment safety: one shared state key, multiple environments
+
+**Read this before ever running a `staging`/`dev` `plan` or `apply` against
+the Responsive Cities backend.**
+
+`backend.s3.hcl` points at a *single* S3 state key
+(`rc/data-smart/portal-wrapper/terraform.tfstate`) that today holds the real
+**prod** deployment — there is no separate per-environment state file or
+Terraform workspace. `deployment_environment` (via `-var-file`) only changes
+what Terraform *names* resources; it does nothing to change *which* state
+file they're read from or written to.
+
+That means: if this same backend is ever `plan`/`apply`'d with
+`-var-file=rc-staging.tfvars` (or any `-var deployment_environment=...` other
+than `prod`), Terraform reads it as "every existing prod resource must be
+renamed from `rc-<slug>-mcp-prod` to `rc-<slug>-mcp-staging`" — which is a
+**destroy-and-recreate** for Lambdas, IAM roles, and CloudWatch log groups
+(losing all log history), plus outright deletion of every custom domain, ACM
+certificate, and Route53 record, across *every* deployed portal. This is not
+hypothetical — it was caught by inspecting a saved plan file before applying,
+where an innocuous "add 2 new portals" change turned into a plan with **286
+resources to destroy**.
+
+**The guard.** `portal_manager.py plan`/`apply`/`destroy` checks, before
+doing anything else, whether the initialized backend's state already belongs
+to a different environment than the one you asked for (by reading the
+`Environment` tag off any existing resource via `terraform show -json`) and
+**refuses to proceed** if they don't match:
+
+```
+REFUSING to plan: the initialized Terraform backend's state already holds
+'prod' resources (by their Environment tag), but --environment=staging was
+requested.
+...
+```
+
+If you hit this, you asked for the wrong environment, or you're trying to
+`plan`/`apply` a *new* environment for the first time — see below. Don't pass
+`--skip-environment-check` to get past it unless you've read this section and
+know exactly why.
+
+**Always pass matching `-e` and `--var-file`** (`-e prod
+--var-file=rc-prod.tfvars`). The CLI puts `--var-file` *before* its own
+`-var deployment_environment=...`, so `-e` (the value the guard checked) wins
+— but a mismatched pair would still pull in the *other* environment's
+`resource_name_prefix`/`permissions_boundary_arn`/custom-domain settings.
+
+**Calling `terraform` directly** bypasses the guard. If you must, first check
+`terraform show -json | jq
+'.values.root_module.resources[0].values.tags_all.Environment'`, and read the
+plan's counts against what you expect: adding portals is add-only (17
+resources per new prod portal), and a code-only redeploy is the shape in §10.
+Any unexpected "to destroy" means stop.
+
+**The real fix (not yet done)**: give each environment its own S3 state key
+(e.g. `rc/data-smart/portal-wrapper/prod.tfstate` and `.../staging.tfstate`),
+migrated via `terraform init -migrate-state -backend-config=backend.s3.hcl
+-backend-config="key=rc/data-smart/portal-wrapper/prod.tfstate"` for prod
+(one-time, relocates the state *pointer* in S3 — it does not touch any AWS
+resource) and a fresh, empty key for staging/dev. Once that's done, the guard
+above becomes redundant defense-in-depth rather than the only thing standing
+between a routine staging plan and a production outage.
 
 ---
 
@@ -230,11 +306,12 @@ AWS_PROFILE=rc-deploy terraform apply -var-file=rc-prod.tfvars
 - **AWS**: an account + configured credentials — admin for a first deploy, or the
   least-privilege `mcp-portal-deployer` identity in Appendix A.
 - **Provision once**: an encrypted, versioned S3 state bucket (§3) + `backend.s3.hcl`.
-- **Secrets**: none for the current portals (all ArcGIS Hub / CKAN); a Socrata
-  portal would need a token (§4).
+- **Secrets**: one app token per Socrata portal (§4); none for ArcGIS Hub /
+  CKAN / Opendatasoft.
 - **Run**: validate → `init -backend-config` → (export creds if needed) →
-  `plan`/`apply` with `deployment_environment=staging` (§5), then read
+  `portal_manager.py plan`/`apply -e staging` (§5), then read
   `portal_api_endpoints` and append `/mcp` (§6).
+- **Responsive Cities prod**: §10, after reading §11.
 
 No custom domain, Route53, or ACM is needed for staging.
 

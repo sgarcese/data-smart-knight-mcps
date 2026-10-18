@@ -13,16 +13,15 @@ This package wraps the `OpenContext` snapshot and provides a central entry point
 - `portal_manager.py` — core wrapper logic.
 - `config/portal_definitions.yaml` — active portal definitions.
 - `config/portal_definitions.example.yaml` — example portal definitions.
+- `terraform/` — per-portal Lambda + API Gateway infrastructure.
+- `dashboard/` — local read-only usage dashboard (see its README).
 - `requirements.txt` — wrapper dependencies.
 
 ## Supported portals
 
-Current supported portal sources:
-- ArcGIS Hub
-- Socrata
-- CKAN
-
-Unsupported portals are intentionally skipped because OpenContext does not support JKAN or OpenDataSoft.
+Portal types supported by OpenContext: ArcGIS Hub (`arcgis`), Socrata
+(`socrata`), CKAN (`ckan`), and Opendatasoft (`opendatasoft`). Other platforms
+(e.g. JKAN) are skipped — see `docs/portals.md`.
 
 ## Definition fields
 
@@ -41,7 +40,12 @@ Each entry in `config/portal_definitions.yaml` supports:
 1. Review `docs/portals.md` and the supported portal list.
 2. Add or update `portal-wrapper/config/portal_definitions.yaml`.
 3. Validate the definitions: `python portal-wrapper/portal_manager.py validate`.
-4. Plan/apply the deployment with the CLI (see below) or directly with Terraform.
+4. Plan/apply the deployment with the CLI (see below).
+
+> **Use the CLI, not bare `terraform plan`/`apply`.** One S3 state key holds
+> every environment, and the CLI refuses to run when the state belongs to a
+> different environment than `-e` — see
+> [`docs/aws-deployment.md` §11](../docs/aws-deployment.md#11-environment-safety-one-shared-state-key-multiple-environments).
 
 ## CLI
 
@@ -55,14 +59,18 @@ python portal-wrapper/portal_manager.py plan -e dev          # terraform plan
 python portal-wrapper/portal_manager.py apply -e staging     # terraform apply
 ```
 
-The current portals are all ArcGIS Hub / CKAN and need no secrets. If you add a
-**Socrata** portal, it requires an app token (passed via the environment, never on
-argv) keyed by its slug:
+Run `plan`/`apply` from `portal-wrapper/terraform` after `terraform init`. For
+the Responsive Cities deployment (`<slug>.responsive.city`), see
+[`docs/aws-deployment.md` §10](../docs/aws-deployment.md#10-responsive-cities-deployment-rc-deploy-role-slugresponsivecity):
 
 ```bash
-python portal-wrapper/portal_manager.py apply -e prod \
-  --app-token <socrata-slug>=YOUR_SOCRATA_TOKEN
+AWS_PROFILE=rc-deploy python ../portal_manager.py apply -e prod --var-file=rc-prod.tfvars
 ```
+
+Socrata portals need an app token keyed by slug — from the gitignored
+`terraform/secret.auto.tfvars`, or `--app-token <slug>=TOKEN` (passed to
+Terraform via the environment, never on argv). ArcGIS Hub, CKAN, and
+Opendatasoft portals need no secrets.
 
 ## AWS deployment scaffolding
 
@@ -76,40 +84,23 @@ Terraform lives in `portal-wrapper/terraform`. For each portal definition it:
 - renders a plugin-type-aware OpenContext config (`config_template.yaml.tftpl`),
 - deploys one Lambda behind an HTTP API Gateway, with CloudWatch logs.
 
-Resource names are scoped per environment (`<slug>-<prefix>-<env>`) so `dev`,
-`staging`, and `prod` can coexist in one account.
+Resources are named `<resource_name_prefix><slug>-mcp-<env>` (the Responsive
+Cities deployment uses prefix `rc-`), so `dev`, `staging`, and `prod` can
+coexist in one account.
 
 ### Environments
 
 - `dev` / `staging`: API Gateway invoke URL, no DNS. Enable the direct Lambda
   Function URL only for testing with `-var enable_function_url=true`.
-- `prod`: enable custom domains and Route53 DNS records.
+- `prod`: custom domains — with `use_custom_domain` enabled each portal gets
+  `<slug>.<base_domain>` (e.g. `boulder-co.responsive.city`) via ACM + Route53.
 
-### Custom domain model
-
-When `use_custom_domain` is enabled, each portal gets `<portal-slug>.<base_domain>`,
-e.g. `boulder-co.data-portals.example.com`.
-
-### Validate and plan
+### Validate
 
 ```bash
 cd portal-wrapper/terraform
 ./validate.sh                                      # init -backend=false, fmt -check, validate
 terraform init -backend-config=backend.s3.hcl      # configure remote state + AWS provider
-terraform plan -var='deployment_environment=dev'
-```
-
-See [`docs/aws-deployment.md`](../docs/aws-deployment.md) for the full runbook
-(state bucket, credentials, the `/mcp` connector path, and verification).
-
-Production with a custom domain:
-
-```bash
-terraform plan \
-  -var='deployment_environment=prod' \
-  -var='use_custom_domain=true' \
-  -var='base_domain=data-portals.example.com' \
-  -var='route53_zone_id=ZXXXXXXXXXXX'
 ```
 
 ### State and secrets

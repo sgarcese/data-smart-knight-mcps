@@ -10,6 +10,7 @@ infrastructure stay in sync (same slug algorithm, same definitions file).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import re
@@ -120,12 +121,26 @@ class TerraformOrchestrator:
         base_domain: str = "",
         route53_zone_id: str = "",
         auto_approve: bool = False,
+        var_files: list[pathlib.Path] | None = None,
     ) -> list[str]:
-        """Return the terraform argv for the given action (pure, for testing)."""
+        """Return the terraform argv for the given action (pure, for testing).
+
+        ``var_files`` (e.g. ``rc-prod.tfvars``) are placed *before* the
+        individual ``-var`` flags below, so those always win for any variable
+        they also set (Terraform applies ``-var`` / ``-var-file`` in
+        command-line order, last write wins). This matters specifically for
+        ``deployment_environment``: it guarantees the value actually applied
+        always matches the ``environment`` this method was called with — the
+        same value ``TerraformOrchestrator.run()``'s environment-safety guard
+        already checked — even if a var file sets it too (as
+        ``rc-prod.tfvars``/``rc-staging.tfvars`` do).
+        """
         if action in {"init", "validate", "fmt"}:
             return ["terraform", action]
 
         cmd = ["terraform", action]
+        for var_file in var_files or []:
+            cmd += [f"-var-file={var_file}"]
         cmd += ["-var", f"portal_definitions_file={self.definitions_file}"]
         cmd += ["-var", f"deployment_environment={environment}"]
 
@@ -139,24 +154,92 @@ class TerraformOrchestrator:
 
         return cmd
 
+    def deployed_environment(self) -> str | None:
+        """Best-effort read of the ``Environment`` tag off any resource already
+        in the currently-initialized backend's state.
+
+        This repo uses a *single* S3 backend key for every environment (see
+        ``backend.s3.hcl`` / ``docs/aws-deployment.md`` "Environment safety") —
+        there's no separate staging/prod state file. That means whichever
+        environment's resources are actually sitting in the initialized state
+        is entirely independent of the ``--environment``/``-var-file`` you
+        happen to pass on the command line, and a mismatched ``plan``/``apply``
+        reads as "rename every existing resource to the other environment",
+        which Terraform will happily destroy-and-recreate (including log
+        groups, IAM roles, and — for prod — custom domains/ACM certs).
+
+        Returns ``None`` if the state is empty/uninitialized (nothing to
+        compare against, so the safety check in ``run()`` is skipped) or if
+        ``terraform show`` can't be run at all (e.g. before the first
+        ``terraform init``).
+        """
+        try:
+            result = subprocess.run(
+                ["terraform", "show", "-json"],
+                cwd=str(self.terraform_dir),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+
+        try:
+            data = json.loads(result.stdout) if result.stdout.strip() else {}
+        except json.JSONDecodeError:
+            return None
+
+        resources = (data.get("values") or {}).get("root_module", {}).get("resources", [])
+        for resource in resources:
+            env = (resource.get("values") or {}).get("tags_all", {}).get("Environment")
+            if env:
+                return env
+        return None
+
     def run(
         self,
         action: str,
         *,
         app_tokens: dict[str, str] | None = None,
         env: dict[str, str] | None = None,
+        skip_environment_check: bool = False,
         **kwargs,
     ) -> int:
         """Execute terraform, returning its exit code.
 
         Secret app tokens are passed via TF_VAR_portal_app_tokens in the
         environment so they never appear in argv or process listings.
+
+        Before ``plan``/``apply``/``destroy``, refuses to proceed if the
+        initialized backend's state already belongs to a *different*
+        environment than requested — see ``deployed_environment()``. Pass
+        ``skip_environment_check=True`` only for a deliberate one-time setup
+        (e.g. the first-ever apply against a brand-new, empty state key).
         """
+        if action in {"plan", "apply", "destroy"} and not skip_environment_check:
+            requested_env = kwargs.get("environment", "dev")
+            deployed_env = self.deployed_environment()
+            if deployed_env and deployed_env != requested_env:
+                print(
+                    f"REFUSING to {action}: the initialized Terraform backend's state "
+                    f"already holds '{deployed_env}' resources (by their Environment tag), "
+                    f"but --environment={requested_env} was requested.\n"
+                    "This repo currently uses ONE shared state key for every environment "
+                    "(see docs/aws-deployment.md \"Environment safety\"), so this would read "
+                    f"as \"rename/replace every '{deployed_env}' resource to "
+                    f"'{requested_env}'\" — including destroying and recreating Lambdas, IAM "
+                    "roles, CloudWatch log groups (losing log history), and any custom "
+                    "domains/ACM certs.\n"
+                    f"Re-run against the '{deployed_env}' environment instead, or see "
+                    "docs/aws-deployment.md for how to set up an isolated state key for "
+                    f"'{requested_env}' first.",
+                    file=sys.stderr,
+                )
+                return 1
+
         cmd = self.build_command(action, **kwargs)
         run_env = dict(env if env is not None else os.environ)
         if app_tokens:
-            import json
-
             run_env["TF_VAR_portal_app_tokens"] = json.dumps(app_tokens)
 
         completed = subprocess.run(cmd, cwd=str(self.terraform_dir), env=run_env)
@@ -193,6 +276,19 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--base-domain", default="")
         p.add_argument("--route53-zone-id", default="")
         p.add_argument(
+            "--var-file",
+            action="append",
+            type=pathlib.Path,
+            metavar="PATH",
+            help=(
+                "Terraform -var-file to pass through (repeatable), e.g. "
+                "terraform/rc-prod.tfvars. Sets resource_name_prefix, "
+                "permissions_boundary_arn, and other account-specific vars that "
+                "this CLI doesn't otherwise expose. --environment must match the "
+                "file's own deployment_environment."
+            ),
+        )
+        p.add_argument(
             "--app-token",
             action="append",
             metavar="slug=token",
@@ -200,6 +296,17 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if action in ("apply", "destroy"):
             p.add_argument("--auto-approve", action="store_true")
+        p.add_argument(
+            "--skip-environment-check",
+            action="store_true",
+            help=(
+                "Bypass the guard that refuses to run if the initialized backend's "
+                "state already belongs to a different environment. Only use this "
+                "for a deliberate one-time setup (e.g. the first apply against a "
+                "brand-new, empty state key) — see docs/aws-deployment.md "
+                "\"Environment safety\"."
+            ),
+        )
     return parser
 
 
@@ -225,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     orchestrator = TerraformOrchestrator(definitions_file=args.definitions)
+    var_files = [p.resolve() for p in (getattr(args, "var_file", None) or [])]
     return orchestrator.run(
         args.command,
         app_tokens=_parse_app_tokens(getattr(args, "app_token", None)),
@@ -233,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         base_domain=args.base_domain,
         route53_zone_id=args.route53_zone_id,
         auto_approve=getattr(args, "auto_approve", False),
+        skip_environment_check=getattr(args, "skip_environment_check", False),
+        var_files=var_files,
     )
 
 

@@ -7,8 +7,11 @@
 # see phila-mcp/terraform/bootstrap/):
 #
 #   AWS_PROFILE=rc-deploy terraform init -backend-config=backend.s3.hcl
-#   AWS_PROFILE=rc-deploy terraform plan  -var-file=rc-prod.tfvars
-#   AWS_PROFILE=rc-deploy terraform apply -var-file=rc-prod.tfvars
+#   AWS_PROFILE=rc-deploy python3 ../portal_manager.py plan  -e prod --var-file=rc-prod.tfvars
+#   AWS_PROFILE=rc-deploy python3 ../portal_manager.py apply -e prod --var-file=rc-prod.tfvars
+#
+# Use portal_manager.py rather than bare terraform: it refuses to run when the
+# state belongs to another environment (docs/aws-deployment.md §11).
 #
 # Contains no secrets (Socrata tokens stay in secret.auto.tfvars, gitignored).
 

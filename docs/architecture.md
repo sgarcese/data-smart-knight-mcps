@@ -2,13 +2,16 @@
 
 ## Design decisions
 
-- The `OpenContext` source is stored as a local snapshot in `opencontext/`.
+- The `OpenContext` source is vendored as a local snapshot in `opencontext/`,
+  synced by hand from [sgarcese/OpenContext](https://github.com/sgarcese/OpenContext)
+  (see the [root README](../README.md#updating-opencontext)).
 - The wrapper project lives in `portal-wrapper/` and orchestrates portal instantiation.
-- This avoids dependency injection from external repos and preserves a stable codebase.
+- Vendoring pins exactly what is deployed and lets a sync be reviewed and
+  tested as one commit before it reaches the Lambdas.
 
 ## High-level flow
 
-1. Define MCP portals in `docs/portals.md` or `portal-wrapper/config/portal_definitions.example.yaml`.
+1. Define MCP portals in `portal-wrapper/config/portal_definitions.yaml` (mirrored in `docs/portals.md`).
 2. Use `portal-wrapper` to generate environment-specific configuration for each portal.
 3. Deploy the portal wrapper and OpenContext instance to AWS using consistent infrastructure patterns.
 
@@ -46,19 +49,14 @@ config, and deploys one AWS Lambda behind an HTTP API Gateway with CloudWatch
 logs. `portal_manager.py` is the orchestration entry point: it validates
 definitions and drives Terraform with the same slug algorithm.
 
-Resource names are environment-scoped (`<slug>-<prefix>-<env>`) so multiple
-environments can coexist in one account.
+Resources are named `<resource_name_prefix><slug>-mcp-<env>` (`rc-` prefix in
+the Responsive Cities account) so multiple environments can coexist in one
+account. Note that one Terraform state key currently holds every environment —
+see [aws-deployment.md §11](aws-deployment.md#11-environment-safety-one-shared-state-key-multiple-environments).
 
-For an end-to-end AWS deployment runbook — prerequisites, encrypted S3 state, the
-`/mcp` connector path, and a least-privilege deployer IAM policy — see
-[aws-deployment.md](aws-deployment.md).
-
-Validation steps:
-
-1. `cd portal-wrapper/terraform`
-2. `./validate.sh`
-3. `terraform init -backend-config=backend.s3.hcl && terraform plan -var='deployment_environment=dev'`
-   (or `python ../portal_manager.py plan -e dev`)
+For the deployment runbook — prerequisites, encrypted S3 state, the `/mcp`
+connector path, the Responsive Cities deployment, and a least-privilege
+deployer IAM policy — see [aws-deployment.md](aws-deployment.md).
 
 ## Security and operations posture
 

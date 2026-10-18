@@ -1,7 +1,9 @@
 # Responsive Cities staging deployment: rc-<slug>-mcp-staging, no custom
 # domains (use the API Gateway invoke URLs from terraform output).
 #
-#   AWS_PROFILE=rc-deploy terraform apply -var-file=rc-staging.tfvars
+# WARNING: the backend in backend.s3.hcl holds PROD state. Do not plan/apply
+# this file against it — give staging its own state key first
+# (docs/aws-deployment.md §11).
 
 deployment_environment = "staging"
 
