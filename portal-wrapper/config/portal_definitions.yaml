@@ -23,6 +23,10 @@ portals:
     url: https://data.charlottenc.gov
     type: arcgis
     notes: "ArcGIS Hub portal supported by OpenContext."
+  - city: Colorado
+    url: https://data.colorado.gov
+    type: socrata
+    notes: "State of Colorado open data Socrata portal supported by OpenContext."
   - city: Columbia, SC
     url: https://coc-colacitygis.opendata.arcgis.com
     type: arcgis

@@ -13,6 +13,7 @@ adding or changing a portal. Each one is served at
 | Cali, Colombia | https://datos.cali.gov.co | CKAN | Supported by OpenContext.
 | California | https://data.ca.gov | CKAN | Statewide. Supported by OpenContext.
 | Charlotte, NC | https://data.charlottenc.gov | ArcGIS Hub | Supported by OpenContext.
+| Colorado | https://data.colorado.gov | Socrata | Statewide. Supported by OpenContext. Requires a Socrata app token.
 | Columbia, SC | https://coc-colacitygis.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
 | Detroit, MI | https://data.detroitmi.gov | ArcGIS Hub | Supported by OpenContext.
 | Hawaii | https://opendata.hawaii.gov | CKAN | Statewide. Supported by OpenContext.
