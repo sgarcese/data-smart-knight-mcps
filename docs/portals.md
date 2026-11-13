@@ -8,6 +8,7 @@ adding or changing a portal. Each one is served at
 | City | Portal URL | Portal Type | Notes |
 |------|------------|-------------|-------|
 | Austin, TX | https://data.austintexas.gov | Socrata | Supported by OpenContext. Requires a Socrata app token.
+| Bakersfield, CA | https://bakersfielddatalibrary-cob.opendata.arcgis.com | ArcGIS Hub | Supported by OpenContext.
 | Bogotá, Colombia | https://datosabiertos.bogota.gov.co | CKAN | Supported by OpenContext.
 | Boulder, CO | https://open-data.bouldercolorado.gov | ArcGIS Hub | Supported by OpenContext.
 | Cali, Colombia | https://datos.cali.gov.co | CKAN | Supported by OpenContext.

@@ -3,6 +3,10 @@ portals:
     url: https://data.austintexas.gov
     type: socrata
     notes: "Socrata portal supported by OpenContext."
+  - city: Bakersfield, CA
+    url: https://bakersfielddatalibrary-cob.opendata.arcgis.com
+    type: arcgis
+    notes: "ArcGIS Hub portal supported by OpenContext."
   - city: Bogota, Colombia
     url: https://datosabiertos.bogota.gov.co
     type: ckan
